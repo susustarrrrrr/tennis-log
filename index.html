@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>打进澳网</title>
+<meta name="description" content="打进澳网 · 网球运动记录 · 私教 / 练球 / 比赛 · 云端同步" />
+<meta name="theme-color" content="#F4FBF6" />
+
+<link rel="manifest" href="./manifest.webmanifest" />
+<link rel="icon" href="./icons/favicon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="./icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="打进澳网" />
+<meta name="format-detection" content="telephone=no" />
+
+<link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+
+<!-- ============ 启动加载 ============ -->
+<div id="boot" class="boot">
+  <div class="boot-ball"></div>
+  <p>正在准备球场…</p>
+</div>
+
+<!-- ============ 配置引导页（未填 Supabase 时显示） ============ -->
+<section id="view-setup" class="screen hidden">
+  <div class="screen-inner">
+    <div class="logo-row">
+      <div class="logo-ball"></div>
+      <h1>打进澳网</h1>
+    </div>
+    <div class="card">
+      <h2 class="card-title">第一步：连接你的云端数据库</h2>
+      <p class="hint">
+        还没有配置 Supabase。可以直接修改源码里的
+        <code>js/config.js</code>，也可以先在这里临时填入试用。
+      </p>
+      <label class="field">
+        <span>Supabase Project URL</span>
+        <input id="setup-url" type="url" inputmode="url" placeholder="https://xxxxxxxx.supabase.co" autocomplete="off" />
+      </label>
+      <label class="field">
+        <span>Supabase Publishable key（发布密钥）</span>
+        <textarea id="setup-key" rows="3" placeholder="sb_publishable_..."></textarea>
+      </label>
+      <button id="setup-save" class="btn btn-primary btn-block">保存并连接</button>
+      <p class="hint tiny">这两个值只保存在本机用于连接服务，不会存放任何打球数据。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 登录 / 注册 ============ -->
+<section id="view-auth" class="screen hidden">
+  <div class="screen-inner">
+    <div class="logo-row">
+      <div class="logo-ball"></div>
+      <div>
+        <h1>打进澳网</h1>
+        <p class="subtitle">用一场场挥拍，打进澳网</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="seg" id="auth-seg">
+        <button class="seg-item active" data-mode="login">登录</button>
+        <button class="seg-item" data-mode="signup">注册</button>
+      </div>
+
+      <label class="field">
+        <span>用户名 / 昵称</span>
+        <input id="auth-name" type="text" inputmode="text" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="给自己起个名字，例如 小苏同学" />
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input id="auth-pass" type="password" autocomplete="current-password" placeholder="至少 6 位" />
+      </label>
+
+      <p id="auth-msg" class="auth-msg"></p>
+      <button id="auth-submit" class="btn btn-primary btn-block">登录</button>
+      <p class="hint tiny center">数据全部存放在你自己的云端账号里，换手机登录同样看得到</p>
+      <button id="auth-config" class="link-btn">数据库连接设置</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 主体 ============ -->
+<div id="view-main" class="hidden">
+
+  <header class="topbar">
+    <div class="topbar-title">
+      <span id="topbar-emoji" class="top-ico" data-ico="tennis"></span>
+      <h1 id="topbar-text">我的球场记录</h1>
+    </div>
+    <button id="btn-refresh" class="icon-btn" data-ico="refresh" aria-label="刷新"></button>
+  </header>
+
+  <main id="main-scroll">
+
+    <!-- ---------- 页面1：记录 ---------- -->
+    <section id="page-records" class="page">
+      <div class="stat-strip" id="records-strip"></div>
+
+      <div class="filter-row" id="records-filter"></div>
+
+      <div id="records-list" class="list"></div>
+
+      <div id="records-empty" class="empty hidden">
+        <div class="empty-emoji" data-ico="tennis"></div>
+        <p>还没有记录哦<br />点右下角的 + 记下第一次挥拍吧</p>
+      </div>
+    </section>
+
+    <!-- ---------- 页面2：月历 ---------- -->
+    <section id="page-calendar" class="page hidden">
+      <div class="cal-head">
+        <button class="icon-btn" id="cal-prev" aria-label="上个月">‹</button>
+        <div class="cal-title" id="cal-title">2026 年 8 月</div>
+        <button class="icon-btn" id="cal-next" aria-label="下个月">›</button>
+      </div>
+
+      <div class="card cal-card">
+        <div class="cal-week">
+          <span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span>
+        </div>
+        <div class="cal-grid" id="cal-grid"></div>
+      </div>
+
+      <!-- 运动类型图例：紧跟月历，作为月历里网球颜色的钥匙 -->
+      <div class="legend" id="cal-legend"></div>
+
+      <h3 class="section-title">本月小结</h3>
+      <div class="sum-grid" id="cal-summary"></div>
+    </section>
+
+    <!-- ---------- 页面3：统计 ---------- -->
+    <section id="page-stats" class="page hidden">
+      <div class="seg seg-inline" id="stats-seg">
+        <button class="seg-item active" data-range="month">本月</button>
+        <button class="seg-item" data-range="year">本年</button>
+        <button class="seg-item" data-range="all">全部</button>
+      </div>
+
+      <div class="sum-grid" id="stats-summary"></div>
+
+      <h3 class="section-title">类型分布</h3>
+      <div class="card"><div id="stats-types" class="type-dist"></div></div>
+
+      <h3 class="section-title">耗力分布</h3>
+      <div class="card"><div id="stats-effort" class="type-dist"></div></div>
+
+      <h3 class="section-title">每月时长趋势（小时）</h3>
+      <div class="card"><div class="bars" id="stats-bars"></div></div>
+    </section>
+
+    <!-- ---------- 页面4：我的 ---------- -->
+    <section id="page-settings" class="page hidden">
+      <div class="card user-card">
+        <button class="avatar tap-on" id="me-avatar" aria-label="点击上传头像"><span class="avatar-ico" data-ico="user"></span></button>
+        <input id="me-avatar-input" type="file" accept="image/*" hidden />
+        <div class="user-meta">
+          <div class="user-name" id="me-email">—</div>
+          <div class="user-sub" id="me-sub">云端同步已开启</div>
+          <div class="user-tip">点击头像可上传图片</div>
+        </div>
+      </div>
+
+      <h3 class="section-title">运动类型 <button id="btn-add-type" class="mini-btn">+ 新增</button></h3>
+      <div class="card" id="type-list"></div>
+
+      <h3 class="section-title">数据</h3>
+      <div class="card menu">
+        <button class="menu-item" id="btn-export">
+          <span class="mi"><span class="mi-ico" data-ico="download"></span>导出 CSV 备份</span><span class="chev">›</span>
+        </button>
+        <button class="menu-item" id="btn-install">
+          <span class="mi"><span class="mi-ico" data-ico="phone"></span>添加到手机桌面</span><span class="chev">›</span>
+        </button>
+        <button class="menu-item danger" id="btn-logout">
+          <span class="mi"><span class="mi-ico" data-ico="logout"></span>退出登录</span><span class="chev">›</span>
+        </button>
+      </div>
+
+      <p class="hint tiny center version">打进澳网 v1.0 · 数据存放于你的 Supabase 云端</p>
+    </section>
+
+  </main>
+
+  <button id="fab" class="fab tap-on" data-ico="tennis" aria-label="新增记录"></button>
+
+  <nav class="tabbar">
+    <button class="tab tap-on active" data-page="records"><i class="tab-ico" data-ico="tennisStack"></i><span>打球手记</span></button>
+    <button class="tab tap-on" data-page="calendar"><i class="tab-ico" data-ico="calEvent"></i><span>网球日程</span></button>
+    <button class="tab tap-on" data-page="stats"><i class="tab-ico" data-ico="chart"></i><span>战绩看板</span></button>
+    <button class="tab tap-on" data-page="settings"><i class="tab-ico" data-ico="userCap"></i><span>冲澳档案</span></button>
+  </nav>
+</div>
+
+<!-- ============ 记录编辑抽屉 ============ -->
+<div id="sheet-record" class="sheet-mask hidden">
+  <div class="sheet">
+    <div class="sheet-bar"></div>
+    <div class="sheet-head">
+      <button class="text-btn" id="rec-cancel">取消</button>
+      <strong id="rec-title">新增记录</strong>
+      <button class="text-btn primary" id="rec-save">保存</button>
+    </div>
+    <div class="sheet-body">
+      <div class="field">
+        <span>运动类型</span>
+        <div class="chips" id="rec-types"></div>
+      </div>
+
+      <div class="field">
+        <span>运动日期</span>
+        <input id="rec-date" type="date" />
+      </div>
+
+      <div class="field">
+        <span>运动时长（分钟）</span>
+        <div class="chips" id="rec-duration-chips">
+          <button class="chip ghost" data-min="60">60</button>
+          <button class="chip ghost" data-min="90">90</button>
+          <button class="chip ghost" data-min="120">120</button>
+          <button class="chip ghost" data-min="150">150</button>
+        </div>
+        <input id="rec-duration" type="number" inputmode="numeric" min="1" max="1440" step="5" placeholder="例如 90" />
+      </div>
+
+      <div class="field">
+        <span>耗力程度</span>
+        <div class="effort-pick" id="rec-effort"></div>
+        <div class="effort-label" id="rec-effort-label">轻松热身</div>
+      </div>
+
+      <div class="field">
+        <span>本次费用（元）</span>
+        <input id="rec-cost" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0" />
+      </div>
+
+      <div class="field">
+        <span>备注（选填）</span>
+        <textarea id="rec-note" rows="3" placeholder=""></textarea>
+      </div>
+
+      <button id="rec-delete" class="btn btn-danger btn-block hidden">删除这条记录</button>
+      <div class="sheet-pad"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 类型编辑抽屉 ============ -->
+<div id="sheet-type" class="sheet-mask hidden">
+  <div class="sheet sheet-short">
+    <div class="sheet-bar"></div>
+    <div class="sheet-head">
+      <button class="text-btn" id="type-cancel">取消</button>
+      <strong id="type-title">新增类型</strong>
+      <button class="text-btn primary" id="type-save">保存</button>
+    </div>
+    <div class="sheet-body">
+      <div class="field">
+        <span>类型名称</span>
+        <input id="type-name" type="text" maxlength="10" placeholder="如：双打约球" />
+      </div>
+      <div class="field">
+        <span>主题颜色</span>
+        <div class="color-row">
+          <input id="type-color" type="color" value="#7BD9A8" />
+          <div class="swatches" id="type-swatches"></div>
+        </div>
+      </div>
+      <div class="field">
+        <span>预览</span>
+        <div class="type-preview" id="type-preview">
+          <span class="dot"></span><b>双打约球</b>
+        </div>
+      </div>
+      <button id="type-delete" class="btn btn-danger btn-block hidden">删除该类型</button>
+      <div class="sheet-pad"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 某日详情弹窗 ============ -->
+<div id="modal-day" class="modal-mask hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <strong id="day-title">8 月 5 日</strong>
+      <button class="icon-btn" id="day-close" data-ico="close" aria-label="关闭"></button>
+    </div>
+    <div class="modal-body" id="day-body"></div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="day-add">＋ 这天再记一笔</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ 确认框 & Toast ============ -->
+<div id="confirm-mask" class="modal-mask hidden">
+  <div class="modal modal-sm">
+    <div class="modal-body">
+      <p id="confirm-text" class="confirm-text">确定吗？</p>
+    </div>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost" id="confirm-no">再想想</button>
+      <button class="btn btn-danger" id="confirm-yes">确定</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="./js/vendor/supabase.min.js" defer></script>
+<script src="./js/config.js" defer></script>
+<script src="./js/utils.js" defer></script>
+<script src="./js/api.js" defer></script>
+<script src="./js/page-records.js" defer></script>
+<script src="./js/page-calendar.js" defer></script>
+<script src="./js/page-stats.js" defer></script>
+<script src="./js/page-settings.js" defer></script>
+<script src="./js/app.js" defer></script>
+</body>
+</html>

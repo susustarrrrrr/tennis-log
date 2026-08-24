@@ -1,0 +1,13 @@
+# 操作系统 / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 本地日志 / 临时文件
+*.log
+tmp/
