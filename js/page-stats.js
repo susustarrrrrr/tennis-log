@@ -33,18 +33,23 @@ window.Stats = (function () {
       card('打球次数', cnt + '<small>次</small>', 'tennis') +
       card('累计时长', (Math.round(min / 6) / 10) + '<small>小时</small>', 'clock') +
       card('平均单次', (cnt ? Math.round(min / cnt) : 0) + '<small>分钟</small>', 'target') +
-      card('累计花费', '¥' + U.money(cost), 'yuan') +
-      card('场均花费', '¥' + U.money(cnt ? cost / cnt : 0), 'yuan') +
+      card('累计花费', App.costView(cost), 'yuan', true) +
+      card('场均花费', App.costView(cnt ? cost / cnt : 0), 'yuan', true) +
       card('平均耗力', (Math.round(eff * 10) / 10 || 0) + '<small>/5</small>', 'tennis');
 
+    var eb = $('#stats-summary [data-cost-eye]');
+    if (eb) eb.addEventListener('click', function (e) { e.stopPropagation(); App.toggleCostHidden(); });
     renderBars();
     renderTypeDist(list, min);
     renderEffortDist(list);
   }
 
-  function card(k, v, iconName) {
+  function card(k, v, iconName, eye) {
+    var eyeBtn = eye
+      ? '<button class="eye-btn" data-cost-eye aria-label="隐藏或显示花费">' + U.svg(App.costHidden ? 'eyeOff' : 'eye') + '</button>'
+      : '';
     return '<div class="sum-card"><div class="k">' + k + '</div><div class="v">' + v +
-      '</div>' + U.svg(iconName, 'bg-ico') + '</div>';
+      '</div>' + eyeBtn + U.svg(iconName, 'bg-ico') + '</div>';
   }
 
   /* ---- 近 12 个月时长柱状图 ---- */
@@ -132,6 +137,8 @@ window.Stats = (function () {
         renderTypeDist(list, totalMin);
       });
     });
+    var teb = $('#stats-types [data-cost-eye]');
+    if (teb) teb.addEventListener('click', function (e) { e.stopPropagation(); App.toggleCostHidden(); });
   }
 
   /* 聚合单个类型：次数 / 总时长 / 总花费 / 平均精力 */
@@ -144,7 +151,11 @@ window.Stats = (function () {
   }
 
   function metric(v, k) {
-    return '<div class="tc-m"><div class="tc-mv">' + v + '</div><div class="tc-mk">' + k + '</div></div>';
+    var eye = k === '花费'
+      ? '<button class="eye-btn" data-cost-eye aria-label="隐藏或显示花费">' + U.svg(App.costHidden ? 'eyeOff' : 'eye') + '</button>'
+      : '';
+    return '<div class="tc-m' + (k === '花费' ? ' has-eye' : '') + '">' + eye +
+      '<div class="tc-mv">' + v + '</div><div class="tc-mk">' + k + '</div></div>';
   }
 
   /* 单张类型卡片：配色用类型色，指标按 时长 / 花费 / 精力 三列布局 */
@@ -159,7 +170,7 @@ window.Stats = (function () {
       '</div>' +
       '<div class="tc-grid">' +
         metric((dur || 0) + 'h', '时长') +
-        metric('¥' + U.money(r.cost), '花费') +
+        metric(App.costView(r.cost), '花费') +
         metric((r.eff || 0) + '<small>/5</small>', '精力') +
       '</div>' +
       '<div class="tc-bar"><i style="width:' + pct + '%;background:' + r.color + '"></i></div>' +

@@ -580,3 +580,18 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 14px; }
   .tabbar { max-width: 520px; left: 50%; transform: translateX(-50%); border-radius: 24px 24px 0 0; }
   .fab { right: calc(50% - 260px + 18px); }
 }
+
+/* ---- 花费隐私眼睛开关（统一一个开关控制所有花费数字显隐） ---- */
+.s-item { position: relative; }
+.eye-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 22px; height: 22px; padding: 0; margin: 0;
+  border: none; background: transparent; color: var(--ink-2);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; border-radius: 50%; -webkit-tap-highlight-color: transparent;
+}
+.eye-btn .ico { width: 16px; height: 16px; stroke-width: 1.9; }
+.eye-btn:active { background: rgba(0,0,0,.07); }
+.tc-m.has-eye { position: relative; }
+.tc-m .eye-btn { top: 0; right: 0; width: 18px; height: 18px; }
+.tc-m .eye-btn .ico { width: 13px; height: 13px; }

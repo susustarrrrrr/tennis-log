@@ -104,6 +104,17 @@
       Settings.render();
     },
 
+    /* ---- 花费隐私开关：统一一个开关，控制 App 内所有花费数字显隐 ---- */
+    costHidden: (function () { try { return localStorage.getItem('tl_cost_hidden') === '1'; } catch (e) { return false; } })(),
+    costView: function (v) {
+      return App.costHidden ? '¥ ••••' : ('¥' + U.money(v));
+    },
+    toggleCostHidden: function () {
+      App.costHidden = !App.costHidden;
+      try { localStorage.setItem('tl_cost_hidden', App.costHidden ? '1' : '0'); } catch (e) {}
+      App.renderAll();
+    },
+
     /* ---- 从云端拉取全部数据（先渲染本地缓存，云端同步后台进行，避免手机慢网络时一直空白） ---- */
     reloadAll: function (silent) {
       if (!App.state.user) return Promise.resolve();

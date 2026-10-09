@@ -86,8 +86,11 @@ window.Calendar = (function () {
     $('#cal-summary').innerHTML =
       sumCard('总打球时长', (Math.round(min / 6) / 10) + '<small>小时</small>', 'clock') +
       sumCard('打球次数', cnt + '<small>次</small>', 'tennis') +
-      sumCard('总花费', '¥' + U.money(cost), 'yuan') +
+      sumCard('总花费', App.costView(cost), 'yuan', true) +
       sumCard('平均耗力', (Math.round(eff * 10) / 10 || 0) + '<small>/5</small>', 'tennis');
+
+    var eb = $('#cal-summary [data-cost-eye]');
+    if (eb) eb.addEventListener('click', function (e) { e.stopPropagation(); App.toggleCostHidden(); });
 
     /* ---- 图例 ---- */
     $('#cal-legend').innerHTML = App.state.types.map(function (t) {
@@ -95,9 +98,12 @@ window.Calendar = (function () {
     }).join('');
   }
 
-  function sumCard(k, v, iconName) {
+  function sumCard(k, v, iconName, eye) {
+    var eyeBtn = eye
+      ? '<button class="eye-btn" data-cost-eye aria-label="隐藏或显示花费">' + U.svg(App.costHidden ? 'eyeOff' : 'eye') + '</button>'
+      : '';
     return '<div class="sum-card"><div class="k">' + k + '</div><div class="v">' + v +
-      '</div>' + U.svg(iconName, 'bg-ico') + '</div>';
+      '</div>' + eyeBtn + U.svg(iconName, 'bg-ico') + '</div>';
   }
 
   /* ---------------------------------------------------------
@@ -117,7 +123,7 @@ window.Calendar = (function () {
       var tot = recs.reduce(function (a, r) { return a + Number(r.duration_min || 0); }, 0);
       var cost = recs.reduce(function (a, r) { return a + Number(r.cost || 0); }, 0);
       var head = '<div class="hint" style="margin:2px 2px 10px">共 ' + recs.length + ' 场 · ' +
-        U.fmtDur(tot) + ' · ¥' + U.money(cost) + '</div>';
+        U.fmtDur(tot) + ' · ' + App.costView(cost) + '</div>';
       $('#day-body').innerHTML = head + recs.map(function (r) {
         var t = App.typeById(r.type_id);
         return '<div class="day-rec">' +
@@ -130,7 +136,7 @@ window.Calendar = (function () {
             '<div class="kv">' +
               '<span class="pill">' + U.svg('clock') + ' ' + U.fmtDur(r.duration_min) + '</span>' +
               '<span class="pill">' + U.svg('tennis') + ' 耗力 ' + r.effort + '/5</span>' +
-              '<span class="pill cost">¥ ' + U.money(r.cost) + '</span>' +
+              '<span class="pill cost">' + (App.costHidden ? '¥ ••••' : ('¥ ' + U.money(r.cost))) + '</span>' +
             '</div>' +
             '<div style="margin-top:6px">' + U.ballsHTML(r.effort) + '</div>' +
             (r.note ? '<div class="note" style="margin-top:7px;font-size:12.5px;color:#A79FB0;white-space:normal">' + U.svg('note') + ' ' + U.esc(r.note) + '</div>' : '') +

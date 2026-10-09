@@ -28,7 +28,10 @@ window.Records = (function () {
     $('#records-strip').innerHTML =
       item(monthRecs.length, '本月次数') +
       item((Math.round(mMin / 6) / 10) + 'h', '本月时长') +
-      item('¥' + U.money(mCost), '本月花费');
+      item(App.costView(mCost), '本月花费', {eye: true});
+
+    var eb = $('#records-strip [data-cost-eye]');
+    if (eb) eb.addEventListener('click', function (e) { e.stopPropagation(); App.toggleCostHidden(); });
 
     /* 类型筛选 */
     var chips = ['<button class="filter-chip tap-on' + (st.filterType === 'all' ? ' active' : '') + '" data-t="all"' +
@@ -83,11 +86,16 @@ window.Records = (function () {
   }
 
   /* 卡片两行：数字（大字金色） + 描述（4 字小字灰） ，全部水平居中 */
-  function item(v, k) {
-    return '<div class="s-item tap-on"><div class="s-meta">' +
-      '<b>' + v + '</b>' +
-      '<span>' + k + '</span>' +
-    '</div></div>';
+  function item(v, k, opt) {
+    opt = opt || {};
+    var eye = opt.eye
+      ? '<button class="eye-btn" data-cost-eye aria-label="隐藏或显示花费">' + U.svg(App.costHidden ? 'eyeOff' : 'eye') + '</button>'
+      : '';
+    return '<div class="s-item tap-on">' + eye +
+      '<div class="s-meta">' +
+        '<b>' + v + '</b>' +
+        '<span>' + k + '</span>' +
+      '</div></div>';
   }
   function sum(arr, f) { return arr.reduce(function (a, r) { return a + Number(r[f] || 0); }, 0); }
   function find(id) {

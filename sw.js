@@ -10,7 +10,7 @@
  *    controllerchange 刷新，部署新代码仍会自动生效。
  *  - 业务数据完全依赖云端 Supabase，不写入本地缓存。
  * =========================================================== */
-var CACHE = 'tennis-ao-2.0.8';
+var CACHE = 'tennis-ao-2.0.9';
 
 var SHELL = [
   './',

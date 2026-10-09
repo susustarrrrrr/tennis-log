@@ -36,7 +36,9 @@ window.U = (function () {
     list:     '<path d="M5 5h14M5 12h14M5 19h14"/><circle cx="8.5" cy="5" r="0.6" fill="currentColor"/><circle cx="8.5" cy="12" r="0.6" fill="currentColor"/><circle cx="8.5" cy="19" r="0.6" fill="currentColor"/>',
     target:   '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
     close:    '<path d="M6 6l12 12M18 6L6 18"/>',
-    cloud:    '<path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.3A3.5 3.5 0 0 1 17.5 18H7z"/>'
+    cloud:    '<path d="M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1.3A3.5 3.5 0 0 1 17.5 18H7z"/>',
+    eye:      '<path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3.2"/>',
+    eyeOff:   '<path d="M3 3l18 18"/><path d="M10.6 5.1A10.9 10.9 0 0 1 12 5c6.5 0 10.5 7 10.5 7a17 17 0 0 1-3 3.6M6.1 6.3A17 17 0 0 0 1.5 12S5.5 19 12 19a10.6 10.6 0 0 0 4-.8"/><path d="M9.6 9.8A3.2 3.2 0 0 0 12 15.2c1.1 0 2.1-.6 2.6-1.5"/>'
   };
   function svg(name, extra) {
     var p = ICONS[name] || ICONS.tennis;
