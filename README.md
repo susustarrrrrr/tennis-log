@@ -3,6 +3,8 @@
 > 可爱又简洁的网球运动记录 PWA。  
 > 手机优先 · iOS Safari / 安卓浏览器兼容 · 可添加到桌面 · **数据全部存云端，换设备登录自动同步**。
 
+> 🌐 线上地址：**https://susustarrrrrr.github.io/tennis-log/**
+
 ![](./icons/icon-192.png)
 
 ---
@@ -89,7 +91,7 @@ git push
 
 1. GitHub 仓库 → **Settings** → **Pages**
 2. Source 选 `main` 分支 / 根目录 → Save
-3. 等待 1 分钟，访问 `https://你的名字.github.io/tennis-log/` 即可
+3. 等待 1 分钟，访问 `https://susustarrrrrr.github.io/tennis-log/` 即可
 
 > 仓库根目录已经放了一个空的 `.nojekyll` 文件，避免 GitHub 用 Jekyll 过滤下划线开头的文件。
 
