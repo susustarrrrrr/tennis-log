@@ -43,7 +43,8 @@
       syncErr: false,
       syncTimeout: false,
       syncSeq: 0,        // 每次同步的序号，用于丢弃过期回调
-      _settled: false    // 本次同步是否已结束
+      _settled: false,   // 本次同步是否已结束
+      explicitSignOut: false   // 仅“显式退出”才回登录页，后台刷新失败不要误踢
     },
 
     /* 云端同步状态文案（真实反映加载/完成/失败/超时，不再无限「同步中」） */
@@ -367,28 +368,73 @@
   /* =========================================================
    *  启动
    * ========================================================= */
-  function boot() {
-    if (!Config.isReady()) { show('#view-setup'); return; }
+  var bootStarted = false;
 
+  function boot() {
+    if (bootStarted) { attemptSession(); return; }
+    bootStarted = true;
+
+    if (!Config.isReady()) { show('#view-setup'); return; }
     if (!API.init()) { show('#view-setup'); return; }
 
+    /* 登录态变化统一处理（只注册一次，避免重试时重复绑定） */
     API.onAuth(function (event, session) {
       if (session && session.user) {
         if (!App.state.user || App.state.user.id !== session.user.id) enterApp(session.user);
       } else if (event === 'SIGNED_OUT') {
-        leaveApp();
+        // 仅“显式退出”才回登录页；后台刷新失败不要误踢（否则缓存模式进不来）
+        if (App.state.explicitSignOut) leaveApp();
       }
     });
 
+    // 已有本地登录票据 → 秒开（先渲染本地缓存数据），联网校验放到后台，避免卡在启动屏
+    var cached = API.peekSession();
+    if (cached && cached.user) {
+      try { API.setSession(cached.session); } catch (e) {}
+      enterApp(cached.user);
+      API.getSession().catch(function () {});   // 后台静默校验/刷新，失败也不影响已进入
+      return;
+    }
+
+    attemptSession();
+  }
+
+  /* 拉取本地登录票据；网络慢/被拦时给超时兜底，避免永久卡在“准备球场” */
+  function attemptSession() {
+    var b = $('#boot');
+    b.classList.remove('hidden');
+    b.innerHTML = '<div class="boot-ball"></div><p>正在准备球场…</p>';
+
+    var settled = false;
+    var bootTimer = setTimeout(function () {
+      if (settled) return;
+      showBootRetry();
+    }, 8000);   // 8 秒连不上就给出重试入口
+
     API.getSession().then(function (res) {
+      if (settled) return; settled = true; clearTimeout(bootTimer);
       var s = res && res.data ? res.data.session : null;
       if (s && s.user) enterApp(s.user);
       else show('#view-auth');
     }).catch(function (err) {
+      if (settled) return; settled = true; clearTimeout(bootTimer);
       console.error(err);
       show('#view-auth');
       setAuthMsg(API.msg(err));
     });
+  }
+
+  /* 连接超时的友好兜底：保留启动屏，提供“重试连接” */
+  function showBootRetry() {
+    var b = $('#boot');
+    b.classList.remove('hidden');
+    b.innerHTML =
+      '<div class="boot-ball"></div>' +
+      '<p>连接登录服务较慢…</p>' +
+      '<p style="font-size:13px;opacity:.7;margin-top:6px">可能是网络波动，点下面按钮重试</p>' +
+      '<button id="boot-retry" class="btn btn-primary btn-block" style="max-width:200px;margin:14px auto 0">重试连接</button>';
+    var btn = $('#boot-retry');
+    if (btn) btn.addEventListener('click', function () { attemptSession(); });
   }
 
   boot();

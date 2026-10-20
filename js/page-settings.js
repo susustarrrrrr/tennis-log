@@ -216,6 +216,7 @@ window.Settings = (function () {
     U.confirmBox('确定退出登录吗？<br><span style="font-size:12px;color:#A79FB0">数据都在云端，重新登录还在</span>', '退出')
       .then(function (ok) {
         if (!ok) return;
+        App.state.explicitSignOut = true;
         return API.signOut();
       }).catch(function (e) { console.warn(e); });
   });

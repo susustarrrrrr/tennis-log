@@ -52,6 +52,29 @@ window.API = (function () {
   }
   function signOut() { return client().auth.signOut(); }
   function getSession() { return client().auth.getSession(); }
+
+  /** 仅读 localStorage 里的登录票据，绝不做任何网络请求。
+   *  用于“秒开”：老用户即使 Supabase 连不上也能先进入并看到本地缓存数据。 */
+  function peekSession() {
+    try {
+      var c = window.Config.get();
+      if (!c || !c.url) return null;
+      var ref = c.url.replace(/^https?:\/\//, '').split('.')[0];
+      var raw = (typeof localStorage !== 'undefined') ? localStorage.getItem('sb-' + ref + '-auth-token') : null;
+      if (!raw) return null;
+      var data = JSON.parse(raw);
+      var s = data.currentSession || data.session || (data.data && data.data.session) || data;
+      if (s && s.user && s.access_token) return { user: s.user, session: s };
+    } catch (e) {}
+    return null;
+  }
+
+  /** 把缓存票据直接灌入客户端（不发网络请求），让后台同步能用上已有 token */
+  function setSession(st) {
+    try { return client().auth.setSession({ access_token: st.access_token, refresh_token: st.refresh_token }); }
+    catch (e) { return null; }
+  }
+
   function onAuth(cb) { return client().auth.onAuthStateChange(cb); }
 
   /** 把头像等资料写入账号 user_metadata（云端存储，跨设备一致） */
@@ -152,7 +175,7 @@ window.API = (function () {
 
   return {
     init: init, client: client, toEmail: toEmail, displayName: displayName,
-    signUp: signUp, signIn: signIn, signOut: signOut, getSession: getSession, onAuth: onAuth, updateProfile: updateProfile,
+    signUp: signUp, signIn: signIn, signOut: signOut, getSession: getSession, peekSession: peekSession, setSession: setSession, onAuth: onAuth, updateProfile: updateProfile,
     listTypes: listTypes, createType: createType, updateType: updateType, deleteType: deleteType, seedTypes: seedTypes,
     listRecords: listRecords, createRecord: createRecord, updateRecord: updateRecord, deleteRecord: deleteRecord,
     msg: msg
