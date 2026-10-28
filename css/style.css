@@ -595,3 +595,8 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 14px; }
 .tc-m.has-eye { position: relative; }
 .tc-m .eye-btn { top: 0; right: 0; width: 18px; height: 18px; }
 .tc-m .eye-btn .ico { width: 13px; height: 13px; }
+
+/* 禁止浏览器原生「下拉刷新」：避免整页重载把正在填写 / 还没同步到云端的数据弄丢。
+   需要刷新时用右上角的刷新按钮（带云端同步逻辑）。 */
+html, body { overscroll-behavior-y: none; }
+#main-scroll { overscroll-behavior-y: contain; }

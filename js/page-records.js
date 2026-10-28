@@ -8,6 +8,30 @@ window.Records = (function () {
   var pickedType = null;
   var pickedEffort = 3;
 
+  /* 草稿：正在填但还没点「保存」时自动存到本机，下拉刷新 / 误关页面也不丢 */
+  var DRAFT_KEY = 'tl_rec_draft';
+  function saveDraft() {
+    if (editing) return;                                   // 编辑已有记录不需要草稿
+    if ($('#sheet-record').classList.contains('hidden')) return;
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        type_id: pickedType,
+        effort: pickedEffort,
+        date: $('#rec-date').value,
+        duration: $('#rec-duration').value,
+        cost: $('#rec-cost').value,
+        note: $('#rec-note').value
+      }));
+    } catch (e) { /* 隐私模式忽略 */ }
+  }
+  function loadDraft() {
+    try { var raw = localStorage.getItem(DRAFT_KEY); return raw ? JSON.parse(raw) : null; }
+    catch (e) { return null; }
+  }
+  function clearDraft() {
+    try { localStorage.removeItem(DRAFT_KEY); } catch (e) {}
+  }
+
   /* 历史记录按需渲染：默认只画前 50 条，点「查看更早」再追加，避免大量记录卡顿 */
   var RENDER_STEP = 50;
   var renderLimit = RENDER_STEP;
@@ -143,10 +167,17 @@ window.Records = (function () {
     if (!App.typeById(pickedType).id) pickedType = st.types[0].id;
     pickedEffort = rec ? Number(rec.effort) : 3;
 
-    $('#rec-date').value = rec ? rec.played_on : (presetDate || U.todayStr());
-    $('#rec-duration').value = rec ? rec.duration_min : '';
-    $('#rec-cost').value = rec ? (Number(rec.cost) || '') : '';
-    $('#rec-note').value = rec ? (rec.note || '') : '';
+    // 新增时尝试恢复上次未保存的草稿（编辑已有记录不恢复）
+    var draft = rec ? null : loadDraft();
+    if (draft) {
+      if (App.typeById(draft.type_id).id) pickedType = draft.type_id;
+      if (draft.effort >= 1 && draft.effort <= 5) pickedEffort = draft.effort;
+    }
+
+    $('#rec-date').value = rec ? rec.played_on : (draft ? draft.date : (presetDate || U.todayStr()));
+    $('#rec-duration').value = rec ? rec.duration_min : (draft ? draft.duration : '');
+    $('#rec-cost').value = rec ? (Number(rec.cost) || '') : (draft ? draft.cost : '');
+    $('#rec-note').value = rec ? (rec.note || '') : (draft ? draft.note : '');
 
     renderTypeChips();
     renderEffort();
@@ -162,7 +193,7 @@ window.Records = (function () {
     }).join('');
     $('#rec-types').innerHTML = html;
     $$('#rec-types .chip').forEach(function (c) {
-      c.addEventListener('click', function () { pickedType = c.dataset.id; renderTypeChips(); });
+      c.addEventListener('click', function () { pickedType = c.dataset.id; renderTypeChips(); saveDraft(); });
     });
   }
 
@@ -174,15 +205,20 @@ window.Records = (function () {
     $('#rec-effort').innerHTML = html;
     $('#rec-effort-label').textContent = pickedEffort + ' / 5 · ' + U.EFFORT_TEXT[pickedEffort];
     $$('#rec-effort .eb').forEach(function (b) {
-      b.addEventListener('click', function () { pickedEffort = +b.dataset.v; renderEffort(); });
+      b.addEventListener('click', function () { pickedEffort = +b.dataset.v; renderEffort(); saveDraft(); });
     });
   }
 
-  function closeSheet() { $('#sheet-record').classList.add('hidden'); }
+  function closeSheet() { $('#sheet-record').classList.add('hidden'); clearDraft(); }
 
   /* 时长快捷按钮 */
   $$('#rec-duration-chips .chip').forEach(function (c) {
     c.addEventListener('click', function () { $('#rec-duration').value = c.dataset.min; });
+  });
+
+  /* 草稿自动保存：表单任意字段变更即写入本机（下拉刷新 / 误关不丢） */
+  ['#rec-date', '#rec-duration', '#rec-cost', '#rec-note'].forEach(function (sel) {
+    var el = $(sel); if (el) el.addEventListener('input', saveDraft);
   });
 
   $('#rec-cancel').addEventListener('click', closeSheet);
@@ -238,6 +274,7 @@ window.Records = (function () {
       op: isPendingEdit ? 'create' : (isEdit ? 'update' : 'create'),
       uid: App.state.user.id,
       realId: (isEdit && !isPendingEdit) ? editing.id : null,
+      created_at: optimistic.created_at,
       payload: payload
     });
 

@@ -116,6 +116,30 @@
       App.renderAll();
     },
 
+    /* 把离线队列里「已保存但未同步到云端」的记录立刻放回状态列表。
+     * 关键：无论本次云端是否连上都要显示，避免下拉刷新（页面重载）后
+     * 这些本地已存的记录从界面消失（它们仍安全地躺在 localStorage 的 tl_pending 里）。 */
+    reinjectPending: function () {
+      var seen = {};
+      App.state.records.forEach(function (r) { seen[r.id] = true; });
+      App.Offline.all().forEach(function (op) {
+        if (seen[op.localId]) return;
+        seen[op.localId] = true;
+        var rec = {
+          id: op.localId,
+          _pending: true,
+          user_id: op.uid,
+          created_at: op.created_at || new Date().toISOString()
+        };
+        Object.keys(op.payload).forEach(function (k) { rec[k] = op.payload[k]; });
+        App.state.records.push(rec);
+      });
+      App.state.records.sort(function (a, b) {
+        if (a.played_on === b.played_on) return (b.created_at || '') > (a.created_at || '') ? 1 : -1;
+        return a.played_on < b.played_on ? 1 : -1;
+      });
+    },
+
     /* ---- 从云端拉取全部数据（先渲染本地缓存，云端同步后台进行，避免手机慢网络时一直空白） ---- */
     reloadAll: function (silent) {
       if (!App.state.user) return Promise.resolve();
@@ -128,6 +152,7 @@
       // 立即可见：先把上次缓存的数据渲染出来，云端同步在后台默默进行，不再干等空白
       App.state.types = Cache.loadTypes();
       App.state.records = Cache.loadRecords();
+      App.reinjectPending();          // 关键：未同步到云端的记录立即显示，刷新/断网也不丢
       App.renderAll();
       if (!silent) {
         if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
@@ -166,6 +191,9 @@
             App.renderAll();
             App.flushPending();   // 立即重试离线记录
           }
+          // 同步失败/超时：本地未同步记录已在本函数开头恢复显示，
+          // 这里再尝试推一次云端（网络恢复时自动成功），避免一直卡在「同步中」
+          if (!done) App.flushPending();
           if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
           if (err && !isTimeout) { U.toast(API.msg(err)); console.error(err); }
           if (isTimeout) U.toast('云端同步超时，点右上角刷新图标重试');
