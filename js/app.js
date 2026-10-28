@@ -42,6 +42,7 @@
       loading: false,
       syncErr: false,
       syncTimeout: false,
+      flushErr: false,   // 后台把本地记录推云端时是否有失败（用于横幅提示）
       syncSeq: 0,        // 每次同步的序号，用于丢弃过期回调
       _settled: false,   // 本次同步是否已结束
       explicitSignOut: false   // 仅“显式退出”才回登录页，后台刷新失败不要误踢
@@ -103,6 +104,29 @@
       Calendar.render();
       Stats.render();
       Settings.render();
+    },
+
+    /* 记录页顶部「同步状态」横幅：存在「已存手机本地、尚未同步云端」的记录时，
+     * 给出明确提示 + 一键重试，避免用户以为数据丢了。没有未同步记录则隐藏。 */
+    updateSyncBanner: function () {
+      var b = $('#sync-banner');
+      if (!b) return;
+      var pending = App.state.records.filter(function (r) { return r._pending; });
+      var n = pending.length;
+      if (!n) { b.className = 'sync-banner hidden'; b.innerHTML = ''; return; }
+      var loading = App.state.loading;
+      var err = App.state.syncErr || App.state.flushErr;
+      var cls, txt;
+      if (loading) { cls = 'info'; txt = '已存到手机本地 ' + n + ' 条，正在同步云端…'; }
+      else if (err) { cls = 'warn'; txt = '云端暂时连不上，' + n + ' 条已安全存手机本地，联网后自动上传'; }
+      else { cls = 'info'; txt = n + ' 条已存手机本地，正在上传云端'; }
+      b.className = 'sync-banner ' + cls;
+      b.innerHTML =
+        '<span class="sb-ico">' + U.svg('cloud') + '</span>' +
+        '<span class="sb-txt">' + txt + '</span>' +
+        '<button class="sb-btn" id="sb-retry">立即同步</button>';
+      var btn = $('#sb-retry');
+      if (btn) btn.addEventListener('click', function () { App.flushPending(); U.toast('正在尝试同步…'); });
     },
 
     /* ---- 花费隐私开关：统一一个开关，控制 App 内所有花费数字显隐 ---- */
@@ -195,6 +219,7 @@
           // 这里再尝试推一次云端（网络恢复时自动成功），避免一直卡在「同步中」
           if (!done) App.flushPending();
           if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+          App.updateSyncBanner();   // 同步结束后刷新横幅（失败也如实提示）
           if (err && !isTimeout) { U.toast(API.msg(err)); console.error(err); }
           if (isTimeout) U.toast('云端同步超时，点右上角刷新图标重试');
           resolve();
@@ -239,8 +264,10 @@
       if (!ops.length) return;
       var total = ops.length, done = 0, okN = 0, failN = 0;
       function finish() {
+        App.state.flushErr = !!failN;
         if (okN && !failN) U.toast('已同步到云端 ☁️');
         else if (failN) U.toast('云端暂时连不上，记录已存手机本地，稍后自动重试');
+        App.updateSyncBanner();
       }
       ops.forEach(function (op) {
         // 标记在途，防止并发重复同步

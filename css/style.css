@@ -600,3 +600,22 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 14px; }
    需要刷新时用右上角的刷新按钮（带云端同步逻辑）。 */
 html, body { overscroll-behavior-y: none; }
 #main-scroll { overscroll-behavior-y: contain; }
+
+/* ---- 记录页顶部「同步状态」横幅：本地已存、尚未同步云端的记录提示 + 一键重试 ---- */
+.sync-banner {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 4px 6px; padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px; line-height: 1.4;
+}
+.sync-banner.info { background: var(--brand-soft); color: #157a5a; border: 1px solid rgba(47,190,142,.25); }
+.sync-banner.warn { background: #FFF4E0; color: #A9781F; border: 1px solid #FBE3B8; }
+.sync-banner .sb-ico { flex: 0 0 auto; width: 16px; height: 16px; display: inline-flex; }
+.sync-banner .sb-ico svg { width: 16px; height: 16px; }
+.sync-banner .sb-txt { flex: 1 1 auto; }
+.sync-banner .sb-btn {
+  flex: 0 0 auto; margin-left: 8px; border: none;
+  background: var(--brand); color: #fff;
+  font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 9px;
+}
+.sync-banner.warn .sb-btn { background: #E0A23A; }

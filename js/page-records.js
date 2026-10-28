@@ -107,6 +107,8 @@ window.Records = (function () {
     });
     var lm = $('#rec-loadmore');
     if (lm) lm.addEventListener('click', function () { renderLimit += RENDER_STEP; render(); });
+
+    if (App.updateSyncBanner) App.updateSyncBanner();   // 顶部同步状态横幅
   }
 
   /* 卡片两行：数字（大字金色） + 描述（4 字小字灰） ，全部水平居中 */
