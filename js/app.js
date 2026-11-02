@@ -43,6 +43,7 @@
       syncErr: false,
       syncTimeout: false,
       flushErr: false,   // 后台把本地记录推云端时是否有失败（用于横幅提示）
+      flushing: false,   // 后台正在把本地记录推云端（用于同步状态文案，避免误显示「已同步」）
       syncSeq: 0,        // 每次同步的序号，用于丢弃过期回调
       _settled: false,   // 本次同步是否已结束
       explicitSignOut: false   // 仅“显式退出”才回登录页，后台刷新失败不要误踢
@@ -51,7 +52,9 @@
     /* 云端同步状态文案（真实反映加载/完成/失败/超时，不再无限「同步中」） */
     syncLabel: function () {
       var st = App.state;
-      if (st.loading) return U.svg('cloud') + ' 云端同步中…';
+      var pending = App.Offline.all().length;   // 队列里真正「待上传」的数量
+      if (st.loading || st.flushing) return U.svg('cloud') + ' 云端同步中…';
+      if (pending > 0) return pending + ' 条待同步到云端';
       if (st.syncErr) return (st.syncTimeout ? '同步超时，' : '同步失败，') + '点右上角刷新图标重试';
       return st.records.length + ' 条记录 · 已同步';
     },
@@ -99,7 +102,19 @@
       else if (page === 'settings') Settings.render();
     },
 
+    /* 让本地记录的 _pending 标记与离线队列（tl_pending）保持一致：
+     * 只有「队列里还有对应任务」的记录才显示「同步中」。队列已没有该任务的残影标记清空，
+     * 避免「记录其实已上传、却一直显示本地未同步」的不一致。 */
+    reconcilePending: function () {
+      var ids = {};
+      App.Offline.all().forEach(function (o) { ids[o.localId] = true; });
+      App.state.records.forEach(function (r) {
+        if (r._pending && !ids[r.id]) r._pending = false;
+      });
+    },
+
     renderAll: function () {
+      App.reconcilePending();   // 先对齐「同步中」标记，再渲染
       Records.render();
       Calendar.render();
       Stats.render();
@@ -111,15 +126,16 @@
     updateSyncBanner: function () {
       var b = $('#sync-banner');
       if (!b) return;
+      App.reconcilePending();   // 确保「同步中」标记与离线队列一致后再统计
       var pending = App.state.records.filter(function (r) { return r._pending; });
       var n = pending.length;
       if (!n) { b.className = 'sync-banner hidden'; b.innerHTML = ''; return; }
-      var loading = App.state.loading;
+      var flushing = App.state.flushing || App.state.loading;
       var err = App.state.syncErr || App.state.flushErr;
       var cls, txt;
-      if (loading) { cls = 'info'; txt = '已存到手机本地 ' + n + ' 条，正在同步云端…'; }
+      if (flushing) { cls = 'info'; txt = '正在上传 ' + n + ' 条到云端…'; }
       else if (err) { cls = 'warn'; txt = '云端暂时连不上，' + n + ' 条已安全存手机本地，联网后自动上传'; }
-      else { cls = 'info'; txt = n + ' 条已存手机本地，正在上传云端'; }
+      else { cls = 'info'; txt = n + ' 条已存手机本地，待同步到云端'; }
       b.className = 'sync-banner ' + cls;
       b.innerHTML =
         '<span class="sb-ico">' + U.svg('cloud') + '</span>' +
@@ -262,8 +278,10 @@
       // 只取未在途的记录，避免同一记录被并发同步两次（重复上传）
       var ops = App.Offline.all().filter(function (o) { return !o._inflight; });
       if (!ops.length) return;
+      App.state.flushing = true;   // 标记正在推送云端，同步文案如实显示「同步中/待同步」
       var total = ops.length, done = 0, okN = 0, failN = 0;
       function finish() {
+        App.state.flushing = false;
         App.state.flushErr = !!failN;
         if (okN && !failN) U.toast('已同步到云端 ☁️');
         else if (failN) U.toast('云端暂时连不上，记录已存手机本地，稍后自动重试');
