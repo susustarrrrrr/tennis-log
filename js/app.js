@@ -102,6 +102,14 @@
       else if (page === 'settings') Settings.render();
     },
 
+    /* 规范化一条记录的「内容签名」：把空值(null/undefined/空串)与数字类型统一，
+     * 用于判断「离线队列里的条目是否已经在云端存在」（避免 '' 与 null 类型不一致
+     * 导致的重复注入 / 队列残留，这正是「已上传却仍显示本地未同步」的根因之一）。 */
+    normSig: function (r) {
+      function f(v) { if (v === null || v === undefined || v === '') return ''; var n = Number(v); return (n === n) ? n : ''; }
+      return [ r.type_id, r.played_on, f(r.duration_min), f(r.effort), f(r.cost), (r.note == null ? '' : r.note) ].join('§');
+    },
+
     /* 让本地记录的 _pending 标记与离线队列（tl_pending）保持一致：
      * 只有「队列里还有对应任务」的记录才显示「同步中」。队列已没有该任务的残影标记清空，
      * 避免「记录其实已上传、却一直显示本地未同步」的不一致。 */
@@ -210,12 +218,24 @@
           App.refreshIcon(false);
           if (done) {
             // 把尚未同步的离线记录重新放回状态（本地已存，稍后重试），保证始终可见
-            // 若云端已存在同内容的已同步记录，则跳过注入，避免并发时的瞬时重复
             App.Offline.all().forEach(function (op) {
-              var sig = [op.payload.type_id, op.payload.played_on, op.payload.duration_min, op.payload.effort, op.payload.cost, op.payload.note].join('§');
+              var sig = App.normSig(op.payload);
+              // 云端已存在同内容的已同步记录 → 该离线条目其实早就上传成功了（队列残留），
+              // 直接清掉队列，并把本地临时副本替换为云端真实记录（带真实 id，后续可编辑/删除）
+              var dup = App.state.records.find(function (r) {
+                return r.id !== op.localId && r._pending === false && App.normSig(r) === sig;
+              });
+              if (dup) {
+                App.Offline.remove(op.localId);
+                App.state.records = App.state.records.map(function (r) {
+                  if (r.id !== op.localId) return r;
+                  var d = {}; for (var k in dup) d[k] = dup[k]; d._pending = false; return d;
+                });
+                return;
+              }
+              // 否则按原逻辑：本地临时 id 已存在则视为同一份；否则新增一条待同步记录
               var exists = App.state.records.some(function (r) {
-                return r.id === op.localId ||
-                  (r._pending === false && [r.type_id, r.played_on, r.duration_min, r.effort, r.cost, r.note].join('§') === sig);
+                return r.id === op.localId || (r._pending === false && App.normSig(r) === sig);
               });
               if (!exists) {
                 var rec = { id: op.localId, _pending: true, user_id: op.uid, created_at: new Date().toISOString() };
@@ -298,12 +318,20 @@
           : API.createRecord(op.uid, op.payload);
         withTimeout(p, 20000).then(function (res) {
           if (res.error) throw res.error;
-          var row = res.data;                       // 云端返回的真实记录（带真实 id）
-          App.state.records = App.state.records.map(function (r) {
-            if (r.id === op.localId) { row._pending = false; return row; }
-            return r;
-          });
-          App.Offline.remove(op.localId);           // 同步成功：出队（顺带清掉 _inflight）
+          if (res.data) {
+            // 云端返回真实记录（带真实 id）：用真实记录替换本地临时记录
+            var row = res.data; row._pending = false;
+            App.state.records = App.state.records.map(function (r) {
+              return r.id === op.localId ? row : r;
+            });
+          } else {
+            // 请求成功但 Supabase 未回传数据（罕见）：把本地临时副本转正，标记已同步
+            App.state.records = App.state.records.map(function (r) {
+              if (r.id !== op.localId) return r;
+              var c = {}; for (var k in r) c[k] = r[k]; c._pending = false; return c;
+            });
+          }
+          App.Offline.remove(op.localId);           // 同步成功：无论是否回传数据都出队（顺带清掉 _inflight）
           App.renderAll();
           Cache.save(App.state.types, App.state.records);
           done++; okN++; if (done === total) finish();
