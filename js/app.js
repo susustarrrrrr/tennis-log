@@ -29,6 +29,10 @@
     });
   }
 
+  /* 内存中的「在途上传」标记（不写盘）。用它而非持久化 _inflight，可避免 App 重启后
+   * 残留标记导致离线队列永远不再重试——这正是「已存本地却永远待上传」的卡死根因。 */
+  var _inflight = {};
+
   U.paintIcons();   // 注入页面静态 SVG 图标
 
   var App = window.App = {
@@ -46,7 +50,9 @@
       flushing: false,   // 后台正在把本地记录推云端（用于同步状态文案，避免误显示「已同步」）
       syncSeq: 0,        // 每次同步的序号，用于丢弃过期回调
       _settled: false,   // 本次同步是否已结束
-      explicitSignOut: false   // 仅“显式退出”才回登录页，后台刷新失败不要误踢
+      explicitSignOut: false,  // 仅“显式退出”才回登录页，后台刷新失败不要误踢
+      lastFlush: null,   // 上次「上传本地记录到云端」的结果（用于自查面板）
+      lastSync: null     // 上次「从云端下载」的结果（用于自查面板）
     },
 
     /* 云端同步状态文案（真实反映加载/完成/失败/超时，不再无限「同步中」） */
@@ -110,15 +116,12 @@
       return [ r.type_id, r.played_on, f(r.duration_min), f(r.effort), f(r.cost), (r.note == null ? '' : r.note) ].join('§');
     },
 
-    /* 让本地记录的 _pending 标记与离线队列（tl_pending）保持一致：
-     * 只有「队列里还有对应任务」的记录才显示「同步中」。队列已没有该任务的残影标记清空，
-     * 避免「记录其实已上传、却一直显示本地未同步」的不一致。 */
+    /* 让本地记录的 _pending 标记与离线队列（tl_pending）严格对齐：
+     * 「队列里还有这条」= 待上传(_pending=true)，否则=false。离线队列是「待同步」的唯一真相来源。 */
     reconcilePending: function () {
       var ids = {};
       App.Offline.all().forEach(function (o) { ids[o.localId] = true; });
-      App.state.records.forEach(function (r) {
-        if (r._pending && !ids[r.id]) r._pending = false;
-      });
+      App.state.records.forEach(function (r) { r._pending = !!ids[r.id]; });
     },
 
     renderAll: function () {
@@ -129,28 +132,70 @@
       Settings.render();
     },
 
-    /* 记录页顶部「同步状态」横幅：存在「已存手机本地、尚未同步云端」的记录时，
-     * 给出明确提示 + 一键重试，避免用户以为数据丢了。没有未同步记录则隐藏。 */
+    /* 记录页顶部「同步状态」横幅：以离线队列(tl_pending)为唯一真相，如实显示「待上传」数量与失败原因。 */
     updateSyncBanner: function () {
       var b = $('#sync-banner');
       if (!b) return;
       App.reconcilePending();   // 确保「同步中」标记与离线队列一致后再统计
-      var pending = App.state.records.filter(function (r) { return r._pending; });
-      var n = pending.length;
+      var queued = App.Offline.all();
+      var n = queued.length;
       if (!n) { b.className = 'sync-banner hidden'; b.innerHTML = ''; return; }
-      var flushing = App.state.flushing || App.state.loading;
-      var err = App.state.syncErr || App.state.flushErr;
+      var st = App.state;
+      var lf = st.lastFlush || {};
       var cls, txt;
-      if (flushing) { cls = 'info'; txt = '正在上传 ' + n + ' 条到云端…'; }
-      else if (err) { cls = 'warn'; txt = '云端暂时连不上，' + n + ' 条已安全存手机本地，联网后自动上传'; }
-      else { cls = 'info'; txt = n + ' 条已存手机本地，待同步到云端'; }
+      if (st.flushing) { cls = 'info'; txt = '正在上传 ' + n + ' 条到云端…'; }
+      else if (st.syncErr || st.flushErr) {
+        cls = 'warn';
+        var why = (lf && lf.err) ? ('（' + App.shortErr(lf.err) + '）') : '（网络或云端异常）';
+        txt = '云端连不上，' + n + ' 条已安全存手机本地，稍后自动重试 ' + why;
+      } else { cls = 'info'; txt = n + ' 条已存手机本地，待同步到云端'; }
       b.className = 'sync-banner ' + cls;
       b.innerHTML =
         '<span class="sb-ico">' + U.svg('cloud') + '</span>' +
         '<span class="sb-txt">' + txt + '</span>' +
-        '<button class="sb-btn" id="sb-retry">立即同步</button>';
+        '<button class="sb-btn" id="sb-retry">立即同步</button>' +
+        '<button class="sb-btn sb-dbg" id="sb-dbg">自查</button>';
       var btn = $('#sb-retry');
       if (btn) btn.addEventListener('click', function () { App.flushPending(); U.toast('正在尝试同步…'); });
+      var dbg = $('#sb-dbg');
+      if (dbg) dbg.addEventListener('click', function () { App.openDiag(); });
+    },
+
+    /* 把错误信息截断，便于在横幅里显示 */
+    shortErr: function (s) {
+      s = String(s || '');
+      if (s.length > 40) s = s.slice(0, 40) + '…';
+      return s;
+    },
+
+    /* 同步自查面板：让用户（和我们）看清「待上传队列 / 上次上传错误 / 上次下载错误」，便于对症 */
+    openDiag: function () {
+      var mask = $('#diag-mask');
+      if (!mask) return;
+      var queued = App.Offline.all();
+      var lf = App.state.lastFlush || {};
+      var ls = App.state.lastSync || {};
+      var html = '';
+      html += '<div class="diag-sec"><b>待上传队列（' + queued.length + ' 条）</b>';
+      if (!queued.length) html += '<div class="diag-row ok">无，已全部同步到云端</div>';
+      else queued.slice(0, 30).forEach(function (o) {
+        html += '<div class="diag-row">' + U.esc(U.fmtDate(o.payload.played_on)) + ' · ' +
+          U.esc(App.typeById(o.payload.type_id).name) + ' · ' + U.fmtDur(o.payload.duration_min) +
+          (o._inflight ? ' <span class="diag-tag">在途</span>' : '') + '</div>';
+      });
+      html += '</div>';
+      html += '<div class="diag-sec"><b>上次上传</b><div class="diag-row">' +
+        (lf.ts ? (new Date(lf.ts).toLocaleString('zh-CN') + ' · 成功 ' + lf.ok + ' / 失败 ' + lf.fail) : '尚未尝试') +
+        (lf.err ? '<br><span class="diag-err">错误：' + U.esc(lf.err) + '</span>' : '') + '</div></div>';
+      html += '<div class="diag-sec"><b>上次下载</b><div class="diag-row">' +
+        (ls.ts ? (new Date(ls.ts).toLocaleString('zh-CN') + ' · ' + (ls.ok ? '成功' : '失败') + (ls.err ? ('<br><span class="diag-err">错误：' + U.esc(ls.err) + '</span>') : '')) : '尚未尝试') + '</div></div>';
+      html += '<div class="diag-sec diag-tip">若「待上传」一直不为 0：多为手机连 supabase.co 较慢，或云端写入权限(Row Level Security)拦截。点「立即同步」可手动重试；多次失败请把「错误」文字发我。</div>';
+      $('#diag-body').innerHTML = html;
+      mask.classList.remove('hidden');
+      $('#diag-close').onclick = function () { mask.classList.add('hidden'); };
+      mask.onclick = function (e) { if (e.target === mask) mask.classList.add('hidden'); };
+      var rb = $('#diag-retry');
+      if (rb) rb.onclick = function () { mask.classList.add('hidden'); App.flushPending(); U.toast('正在尝试同步…'); };
     },
 
     /* ---- 花费隐私开关：统一一个开关，控制 App 内所有花费数字显隐 ---- */
@@ -215,6 +260,11 @@
           App.state.loading = false;
           App.state.syncErr = !!err;
           App.state.syncTimeout = !!isTimeout;
+          App.state.lastSync = {
+            ok: !!done,
+            err: (err && err.message) ? err.message : (isTimeout ? '超时（30 秒）' : ''),
+            ts: Date.now()
+          };
           App.refreshIcon(false);
           if (done) {
             // 把尚未同步的离线记录重新放回状态（本地已存，稍后重试），保证始终可见
@@ -291,34 +341,41 @@
       _wr: function (l) { try { localStorage.setItem(this.KEY, JSON.stringify(l)); } catch (e) {} },
       enqueue: function (op) { var l = this._rd(); l.push(op); this._wr(l); },
       remove: function (localId) { this._wr(this._rd().filter(function (o) { return o.localId !== localId; })); },
-      all: function () { return this._rd(); }
+      all: function () { return this._rd(); },
+      /* 启动时清掉可能残留的 _inflight 标记：上次上传还没完成就切走/重开 App 会把它写进 localStorage，
+       * 导致后续 flushPending 一律跳过、永远不再重试（这正是「已存本地却永远待上传」的卡死根因）。 */
+      scrubInflight: function () {
+        var l = this._rd();
+        var changed = false;
+        l.forEach(function (o) { if (o._inflight) { delete o._inflight; changed = true; } });
+        if (changed) this._wr(l);
+      }
     },
 
-    /* 把未同步的离线记录逐个尝试同步云端；成功后用真实记录替换本地临时记录，失败则保留稍后重试 */
-    flushPending: function () {
+    /* 把未同步的离线记录逐个尝试同步云端；成功后出队，失败则保留稍后重试。
+     * 在途标记 _inflight 只存在内存（不写盘），App 重启即清空，避免「卡死再也不重试」。 */
+    flushPending: function (silent) {
       if (!App.state.user) return;
-      // 只取未在途的记录，避免同一记录被并发同步两次（重复上传）
-      var ops = App.Offline.all().filter(function (o) { return !o._inflight; });
+      // 只取不在内存在途的记录，避免同一记录被并发同步两次（重复上传）
+      var ops = App.Offline.all().filter(function (o) { return !_inflight[o.localId]; });
       if (!ops.length) return;
       App.state.flushing = true;   // 标记正在推送云端，同步文案如实显示「同步中/待同步」
-      var total = ops.length, done = 0, okN = 0, failN = 0;
+      App.updateSyncBanner();
+      var total = ops.length, done = 0, okN = 0, failN = 0, errMsg = '';
       function finish() {
         App.state.flushing = false;
         App.state.flushErr = !!failN;
-        if (okN && !failN) U.toast('已同步到云端 ☁️');
-        else if (failN) U.toast('云端暂时连不上，记录已存手机本地，稍后自动重试');
+        App.state.lastFlush = { ok: okN, fail: failN, err: errMsg, ts: Date.now() };
+        if (okN && !failN) { if (!silent) U.toast('已同步到云端 ☁️'); }
+        else if (failN) { if (!silent) U.toast('云端暂时连不上，已存手机本地，稍后自动重试'); }
         App.updateSyncBanner();
       }
       ops.forEach(function (op) {
-        // 标记在途，防止并发重复同步
-        var all = App.Offline.all();
-        var t = all.find(function (o) { return o.localId === op.localId; });
-        if (t) { t._inflight = true; App.Offline._wr(all); }
-
+        _inflight[op.localId] = true;   // 内存标记在途（不落盘）
         var p = op.op === 'update'
           ? API.updateRecord(op.realId, op.payload)
           : API.createRecord(op.uid, op.payload);
-        withTimeout(p, 20000).then(function (res) {
+        withTimeout(p, 40000).then(function (res) {
           if (res.error) throw res.error;
           if (res.data) {
             // 云端返回真实记录（带真实 id）：用真实记录替换本地临时记录
@@ -333,16 +390,16 @@
               var c = {}; for (var k in r) c[k] = r[k]; c._pending = false; return c;
             });
           }
-          App.Offline.remove(op.localId);           // 同步成功：无论是否回传数据都出队（顺带清掉 _inflight）
+          App.Offline.remove(op.localId);           // 同步成功：无条件出队
+          delete _inflight[op.localId];
           App.renderAll();
           Cache.save(App.state.types, App.state.records);
           done++; okN++; if (done === total) finish();
         }).catch(function (err) {
           console.warn('离线记录同步失败（保留，稍后自动重试）', op.localId, err);
-          // 清除在途标记，允许下次（网络恢复 / 打开 App / 点刷新）重试
-          var a2 = App.Offline.all();
-          var t2 = a2.find(function (o) { return o.localId === op.localId; });
-          if (t2) { delete t2._inflight; App.Offline._wr(a2); }
+          delete _inflight[op.localId];
+          var m = (err && err.message) ? err.message : String(err);
+          if (!errMsg) errMsg = m;
           done++; failN++; if (done === total) finish();
         });
       });
@@ -477,6 +534,8 @@
     if (bootStarted) { attemptSession(); return; }
     bootStarted = true;
 
+    App.Offline.scrubInflight();   // 清掉上次可能残留的 _inflight 标记，解除「永远不再重试」卡死
+
     if (!Config.isReady()) { show('#view-setup'); return; }
     if (!API.init()) { show('#view-setup'); return; }
 
@@ -580,4 +639,7 @@
 
   /* 网络恢复时，自动把离线保存的记录重试同步到云端 */
   window.addEventListener('online', function () { App.flushPending(); });
+
+  /* 后台每 25 秒自动重试一次未同步记录（静默，不弹 toast），手机网络慢也能最终传上去 */
+  setInterval(function () { if (navigator.onLine !== false) App.flushPending(true); }, 25000);
 })();

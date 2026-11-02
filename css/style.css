@@ -619,3 +619,17 @@ html, body { overscroll-behavior-y: none; }
   font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 9px;
 }
 .sync-banner.warn .sb-btn { background: #E0A23A; }
+.sync-banner .sb-dbg {
+  flex: 0 0 auto; margin-left: 6px; border: 1px solid currentColor;
+  background: transparent; color: inherit; opacity: .8;
+  font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 9px;
+}
+
+/* ---- 同步自查面板 ---- */
+.diag-sec { margin-bottom: 14px; }
+.diag-sec > b { display: block; font-size: 13px; margin-bottom: 6px; color: var(--ink); }
+.diag-row { font-size: 13px; color: var(--ink-2); line-height: 1.6; word-break: break-all; }
+.diag-row.ok { color: var(--brand-2); }
+.diag-tag { display: inline-block; font-size: 11px; background: var(--brand-soft); color: #157a5a; border-radius: 6px; padding: 1px 6px; margin-left: 4px; }
+.diag-err { color: #D4513B; font-size: 12px; }
+.diag-tip { font-size: 12px; color: var(--muted); background: #F6F8F7; border-radius: var(--radius-sm); padding: 10px 12px; line-height: 1.6; }
