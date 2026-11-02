@@ -222,8 +222,9 @@
               var sig = App.normSig(op.payload);
               // 云端已存在同内容的已同步记录 → 该离线条目其实早就上传成功了（队列残留），
               // 直接清掉队列，并把本地临时副本替换为云端真实记录（带真实 id，后续可编辑/删除）
+              // 注意：云端返回的记录没有 _pending 字段(为 undefined)，必须用 !== true 判定「已同步」
               var dup = App.state.records.find(function (r) {
-                return r.id !== op.localId && r._pending === false && App.normSig(r) === sig;
+                return r.id !== op.localId && r._pending !== true && App.normSig(r) === sig;
               });
               if (dup) {
                 App.Offline.remove(op.localId);
@@ -234,8 +235,9 @@
                 return;
               }
               // 否则按原逻辑：本地临时 id 已存在则视为同一份；否则新增一条待同步记录
+              // 云端记录 _pending 为 undefined，用 !== true 才能被正确识别为「已存在」
               var exists = App.state.records.some(function (r) {
-                return r.id === op.localId || (r._pending === false && App.normSig(r) === sig);
+                return r.id === op.localId || (r._pending !== true && App.normSig(r) === sig);
               });
               if (!exists) {
                 var rec = { id: op.localId, _pending: true, user_id: op.uid, created_at: new Date().toISOString() };
