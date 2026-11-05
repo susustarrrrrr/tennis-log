@@ -130,8 +130,8 @@ window.Calendar = (function () {
           '<div class="bar" style="background:' + t.color + '"></div>' +
           '<div style="flex:1;min-width:0">' +
             '<div class="r1" style="display:flex;justify-content:space-between;align-items:center">' +
-              '<b style="font-size:14.5px">' + U.esc(t.name) + '</b>' + (r._pending ? ' <span class="psync">同步中</span>' : '') +
-              '<button class="edit" data-id="' + r.id + '">编辑</button>' +
+              '<b style="font-size:14.5px">' + U.esc(t.name) + '</b>' + (r.dirty && !r.synced ? ' <span class="psync">待同步</span>' : '') +
+              '<button class="edit" data-id="' + r.client_uuid + '">编辑</button>' +
             '</div>' +
             '<div class="kv">' +
               '<span class="pill">' + U.svg('clock') + ' ' + U.fmtDur(r.duration_min) + '</span>' +

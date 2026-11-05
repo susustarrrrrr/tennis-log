@@ -4,22 +4,97 @@
 (function () {
   var $ = U.$, $$ = U.$$;
 
-  /* 本地缓存：把已同步的数据存到 localStorage，刷新/断网时也能瞬时显示，不等云端 */
-  var Cache = {
+  /* ============================================================
+   *  本地优先存储层（唯一真相来源）
+   *  所有业务数据都先写这里，云端只是「可选镜像」。
+   *  刷新 / 断网 / 云端挂了，界面永远从本地渲染，记录永不消失、永不复重。
+   * ============================================================ */
+  var Store = {
+    KEY_RECORDS: 'tl_records',
+    KEY_TYPES: 'tl_types',
     loadTypes: function () {
-      try { return JSON.parse(localStorage.getItem('tl_cache_types')) || []; } catch (e) { return []; }
+      try { return JSON.parse(localStorage.getItem(this.KEY_TYPES)) || []; } catch (e) { return []; }
     },
     loadRecords: function () {
-      try { return JSON.parse(localStorage.getItem('tl_cache_records')) || []; } catch (e) { return []; }
+      try { return JSON.parse(localStorage.getItem(this.KEY_RECORDS)) || []; } catch (e) { return []; }
     },
-    /* 本地缓存只存已同步的记录，pending（未同步）的不进缓存，避免重复/误显 */
-    save: function (types, records) {
-      try {
-        localStorage.setItem('tl_cache_types', JSON.stringify(types));
-        localStorage.setItem('tl_cache_records', JSON.stringify((records || []).filter(function (r) { return !r._pending; })));
-      } catch (e) { /* 配额满或隐私模式，忽略 */ }
+    saveTypes: function (ts) { try { localStorage.setItem(this.KEY_TYPES, JSON.stringify(ts)); } catch (e) {} },
+    saveRecords: function (rs) { try { localStorage.setItem(this.KEY_RECORDS, JSON.stringify(rs)); } catch (e) {} },
+    putType: function (t) {
+      var ts = this.loadTypes();
+      var i = ts.findIndex(function (x) { return x.client_uuid === t.client_uuid; });
+      if (i >= 0) ts[i] = t; else ts.push(t);
+      this.saveTypes(ts);
+      return t;
+    },
+    putRecord: function (r) {
+      var rs = this.loadRecords();
+      var i = rs.findIndex(function (x) { return x.client_uuid === r.client_uuid; });
+      if (i >= 0) rs[i] = r; else rs.push(r);
+      this.saveRecords(rs);
+      return r;
+    },
+    removeType: function (cuuid) {
+      this.saveTypes(this.loadTypes().filter(function (x) { return x.client_uuid !== cuuid; }));
+    },
+    removeRecord: function (cuuid) {
+      this.saveRecords(this.loadRecords().filter(function (x) { return x.client_uuid !== cuuid; }));
     }
   };
+  window.AppStore = Store;
+
+  /* 把旧版本（tl_cache_* + tl_pending）平滑迁移到新的本地优先模型。
+   * 关键：旧云端记录/类型的 cloud id 直接复用为 client_uuid，这样只要云端执行过
+   * 「client_uuid = id」回填，幂等 upsert 就能精准命中旧行、绝不产生重复。 */
+  function migrate() {
+    if (localStorage.getItem('tl_migrated_v2') === '1') return;
+    var oldTypes = []; try { oldTypes = JSON.parse(localStorage.getItem('tl_cache_types')) || []; } catch (e) {}
+    var oldRecs = [];  try { oldRecs  = JSON.parse(localStorage.getItem('tl_cache_records')) || []; } catch (e) {}
+    var pending = [];  try { pending  = JSON.parse(localStorage.getItem('tl_pending')) || []; } catch (e) {}
+
+    // 类型：复用 cloud id 作为 client_uuid
+    var typeMap = {};   // 旧 cloud id -> client_uuid
+    var newTypes = oldTypes.map(function (t) {
+      var cuuid = t.id ? String(t.id) : U.uuid();
+      typeMap[t.id ? String(t.id) : '__none__'] = cuuid;
+      return {
+        id: t.id || null, client_uuid: cuuid, name: t.name, color: t.color,
+        sort_order: t.sort_order || 0, dirty: false, synced: true, deleted: false,
+        created_at: t.created_at || new Date().toISOString(),
+        updated_at: t.updated_at || t.created_at || new Date().toISOString()
+      };
+    });
+
+    function toRec(r, cuuid, isPending) {
+      var typeCuuid = typeMap[(r.type_id != null) ? String(r.type_id) : '__none__'] || '';
+      return {
+        client_uuid: cuuid,
+        type_id: typeCuuid,                 // 类型引用改为「类型的 client_uuid」
+        played_on: r.played_on, duration_min: r.duration_min, effort: r.effort,
+        cost: r.cost, note: r.note || '',
+        created_at: r.created_at || new Date().toISOString(),
+        updated_at: r.updated_at || r.created_at || new Date().toISOString(),
+        dirty: !!isPending, synced: !isPending, deleted: false
+      };
+    }
+
+    var newRecs = [];
+    oldRecs.forEach(function (r) {
+      newRecs.push(toRec(r, r.id ? String(r.id) : U.uuid(), false));  // 云端来的：已同步
+    });
+    pending.forEach(function (op) {
+      newRecs.push(toRec(op.payload || {}, U.uuid(), true));            // 从未上云的：待同步
+    });
+
+    Store.saveTypes(newTypes);
+    Store.saveRecords(newRecs);
+    try {
+      localStorage.setItem('tl_migrated_v2', '1');
+      localStorage.removeItem('tl_cache_types');
+      localStorage.removeItem('tl_cache_records');
+      localStorage.removeItem('tl_pending');
+    } catch (e) {}
+  }
 
   /* 给 Promise 加超时，避免手机连不上 supabase.co 时无限挂起（保存/同步都会用到） */
   function withTimeout(p, ms) {
@@ -29,15 +104,12 @@
     });
   }
 
-  /* 内存中的「在途上传」标记（不写盘）。用它而非持久化 _inflight，可避免 App 重启后
-   * 残留标记导致离线队列永远不再重试——这正是「已存本地却永远待上传」的卡死根因。 */
-  var _inflight = {};
-
   U.paintIcons();   // 注入页面静态 SVG 图标
 
   var App = window.App = {
     state: {
       user: null,
+      cloudEnabled: false,   // 是否已登录云端（云端为可选镜像；本地始终可用）
       types: [],
       records: [],
       filterType: 'all',
@@ -55,14 +127,16 @@
       lastSync: null     // 上次「从云端下载」的结果（用于自查面板）
     },
 
-    /* 云端同步状态文案（真实反映加载/完成/失败/超时，不再无限「同步中」） */
+    /* 云端同步状态文案（本地优先：先说清楚「本地 N 条」，再补充云端情况） */
     syncLabel: function () {
       var st = App.state;
-      var pending = App.Offline.all().length;   // 队列里真正「待上传」的数量
+      var n = (st.records || []).filter(function (r) { return !r.deleted; }).length;
+      if (!st.cloudEnabled) return '本地 ' + n + ' 条 · 未连接云端';
+      var pending = App.pendingCount();
       if (st.loading || st.flushing) return U.svg('cloud') + ' 云端同步中…';
-      if (pending > 0) return pending + ' 条待同步到云端';
+      if (pending > 0) return '本地 ' + n + ' 条 · ' + pending + ' 条待同步云端';
       if (st.syncErr) return (st.syncTimeout ? '同步超时，' : '同步失败，') + '点右上角刷新图标重试';
-      return st.records.length + ' 条记录 · 已同步';
+      return '本地 ' + n + ' 条 · 已同步云端';
     },
 
     /* 右上角刷新按钮：只切旋转动画，绝不替换图标内容 */
@@ -73,10 +147,10 @@
       b.classList.toggle('spinning', !!spinning);
     },
 
-    /* ---- 类型查找 ---- */
+    /* ---- 类型查找（按 client_uuid，本地优先引用方式） ---- */
     typeById: function (id) {
       var t = null;
-      App.state.types.some(function (x) { if (x.id === id) { t = x; return true; } });
+      App.state.types.some(function (x) { if (x.client_uuid === id) { t = x; return true; } });
       return t || { id: null, name: '未分类', color: '#C9C2CE' };
     },
 
@@ -108,39 +182,20 @@
       else if (page === 'settings') Settings.render();
     },
 
-    /* 规范化一条记录的「内容签名」：把空值(null/undefined/空串)与数字类型统一，
-     * 用于判断「离线队列里的条目是否已经在云端存在」（避免 '' 与 null 类型不一致
-     * 导致的重复注入 / 队列残留，这正是「已上传却仍显示本地未同步」的根因之一）。 */
-    normSig: function (r) {
-      function f(v) { if (v === null || v === undefined || v === '') return ''; var n = Number(v); return (n === n) ? n : ''; }
-      return [ r.type_id, r.played_on, f(r.duration_min), f(r.effort), f(r.cost), (r.note == null ? '' : r.note) ].join('§');
-    },
-
-    /* 让本地记录的 _pending 标记与离线队列（tl_pending）严格对齐：
-     * 「队列里还有这条」= 待上传(_pending=true)，否则=false。离线队列是「待同步」的唯一真相来源。 */
-    reconcilePending: function () {
-      var ids = {};
-      App.Offline.all().forEach(function (o) { ids[o.localId] = true; });
-      App.state.records.forEach(function (r) { r._pending = !!ids[r.id]; });
-    },
-
     renderAll: function () {
-      App.reconcilePending();   // 先对齐「同步中」标记，再渲染
       Records.render();
       Calendar.render();
       Stats.render();
       Settings.render();
     },
 
-    /* 记录页顶部「同步状态」横幅：以离线队列(tl_pending)为唯一真相，如实显示「待上传」数量与失败原因。 */
+    /* 记录页顶部「同步状态」横幅：本地优先，如实显示「待同步」数量与失败原因。 */
     updateSyncBanner: function () {
       var b = $('#sync-banner');
       if (!b) return;
-      App.reconcilePending();   // 确保「同步中」标记与离线队列一致后再统计
-      var queued = App.Offline.all();
-      var n = queued.length;
-      if (!n) { b.className = 'sync-banner hidden'; b.innerHTML = ''; return; }
       var st = App.state;
+      var n = App.pendingCount();
+      if (!st.cloudEnabled || !n) { b.className = 'sync-banner hidden'; b.innerHTML = ''; return; }
       var lf = st.lastFlush || {};
       var cls, txt;
       if (st.flushing) { cls = 'info'; txt = '正在上传 ' + n + ' 条到云端…'; }
@@ -156,7 +211,7 @@
         '<button class="sb-btn" id="sb-retry">立即同步</button>' +
         '<button class="sb-btn sb-dbg" id="sb-dbg">自查</button>';
       var btn = $('#sb-retry');
-      if (btn) btn.addEventListener('click', function () { App.flushPending(); U.toast('正在尝试同步…'); });
+      if (btn) btn.addEventListener('click', function () { App.maybeSync(true); U.toast('正在尝试同步…'); });
       var dbg = $('#sb-dbg');
       if (dbg) dbg.addEventListener('click', function () { App.openDiag(); });
     },
@@ -168,20 +223,19 @@
       return s;
     },
 
-    /* 同步自查面板：让用户（和我们）看清「待上传队列 / 上次上传错误 / 上次下载错误」，便于对症 */
+    /* 同步自查面板：让用户（和我们）看清「待同步记录 / 上次上传错误 / 上次下载错误」，便于对症 */
     openDiag: function () {
       var mask = $('#diag-mask');
       if (!mask) return;
-      var queued = App.Offline.all();
+      var pending = App.state.records.filter(function (r) { return r.dirty && !r.deleted; });
       var lf = App.state.lastFlush || {};
       var ls = App.state.lastSync || {};
       var html = '';
-      html += '<div class="diag-sec"><b>待上传队列（' + queued.length + ' 条）</b>';
-      if (!queued.length) html += '<div class="diag-row ok">无，已全部同步到云端</div>';
-      else queued.slice(0, 30).forEach(function (o) {
-        html += '<div class="diag-row">' + U.esc(U.fmtDate(o.payload.played_on)) + ' · ' +
-          U.esc(App.typeById(o.payload.type_id).name) + ' · ' + U.fmtDur(o.payload.duration_min) +
-          (o._inflight ? ' <span class="diag-tag">在途</span>' : '') + '</div>';
+      html += '<div class="diag-sec"><b>待同步到云端（' + pending.length + ' 条）</b>';
+      if (!pending.length) html += '<div class="diag-row ok">无，已全部同步到云端</div>';
+      else pending.slice(0, 30).forEach(function (r) {
+        html += '<div class="diag-row">' + U.esc(U.fmtDate(r.played_on)) + ' · ' +
+          U.esc(App.typeById(r.type_id).name) + ' · ' + U.fmtDur(r.duration_min) + '</div>';
       });
       html += '</div>';
       html += '<div class="diag-sec"><b>上次上传</b><div class="diag-row">' +
@@ -189,13 +243,13 @@
         (lf.err ? '<br><span class="diag-err">错误：' + U.esc(lf.err) + '</span>' : '') + '</div></div>';
       html += '<div class="diag-sec"><b>上次下载</b><div class="diag-row">' +
         (ls.ts ? (new Date(ls.ts).toLocaleString('zh-CN') + ' · ' + (ls.ok ? '成功' : '失败') + (ls.err ? ('<br><span class="diag-err">错误：' + U.esc(ls.err) + '</span>') : '')) : '尚未尝试') + '</div></div>';
-      html += '<div class="diag-sec diag-tip">若「待上传」一直不为 0：多为手机连 supabase.co 较慢，或云端写入权限(Row Level Security)拦截。点「立即同步」可手动重试；多次失败请把「错误」文字发我。</div>';
+      html += '<div class="diag-sec diag-tip">本地数据永远安全，不会因云端连不上而丢失。若「待同步」一直不为 0：多为手机连 supabase.co 较慢，或云端写入权限(Row Level Security)拦截。点「立即同步」可手动重试；多次失败请把「错误」文字发我。</div>';
       $('#diag-body').innerHTML = html;
       mask.classList.remove('hidden');
       $('#diag-close').onclick = function () { mask.classList.add('hidden'); };
       mask.onclick = function (e) { if (e.target === mask) mask.classList.add('hidden'); };
       var rb = $('#diag-retry');
-      if (rb) rb.onclick = function () { mask.classList.add('hidden'); App.flushPending(); U.toast('正在尝试同步…'); };
+      if (rb) rb.onclick = function () { mask.classList.add('hidden'); App.maybeSync(true); U.toast('正在尝试同步…'); };
     },
 
     /* ---- 花费隐私开关：统一一个开关，控制 App 内所有花费数字显隐 ---- */
@@ -209,200 +263,204 @@
       App.renderAll();
     },
 
-    /* 把离线队列里「已保存但未同步到云端」的记录立刻放回状态列表。
-     * 关键：无论本次云端是否连上都要显示，避免下拉刷新（页面重载）后
-     * 这些本地已存的记录从界面消失（它们仍安全地躺在 localStorage 的 tl_pending 里）。 */
-    reinjectPending: function () {
-      var seen = {};
-      App.state.records.forEach(function (r) { seen[r.id] = true; });
-      App.Offline.all().forEach(function (op) {
-        if (seen[op.localId]) return;
-        seen[op.localId] = true;
-        var rec = {
-          id: op.localId,
-          _pending: true,
-          user_id: op.uid,
-          created_at: op.created_at || new Date().toISOString()
-        };
-        Object.keys(op.payload).forEach(function (k) { rec[k] = op.payload[k]; });
-        App.state.records.push(rec);
-      });
+    /* ---- 本地优先加载：本地存储是唯一真相，先渲染本地（瞬时、永不丢），再后台同步云端 ---- */
+    reloadAll: function (silent) {
+      if (!App.state.user) return Promise.resolve();
+      App.loadLocal();                 // 关键：先读本地，界面立刻有数据，刷新/断网都不丢
+      App.renderAll();
+      if (!silent) {
+        if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+      }
+      return App.syncCloud();          // 后台与云端双向同步（拉取绝不删本地）
+    },
+
+    /* ---- 待同步数量（用于横幅与自查面板）：本地有改动且未删除的记录/类型 ---- */
+    pendingCount: function () {
+      var rs = (App.state.records || []).filter(function (r) { return r.dirty && !r.deleted; }).length;
+      var ts = (App.state.types || []).filter(function (t) { return t.dirty && !t.deleted; }).length;
+      return rs + ts;
+    },
+
+    /* ---- 从本地存储读取全部数据（唯一真相来源） ---- */
+    loadLocal: function () {
+      App.state.types = Store.loadTypes();
+      App.state.records = Store.loadRecords();
+      // 新用户（本地没有任何类型）：补 3 个默认类型，标记为待同步
+      if (!App.state.types.length) {
+        App.state.types = U.DEFAULT_TYPES.map(function (t, i) {
+          return {
+            id: null, client_uuid: U.uuid(), name: t.name, color: t.color,
+            sort_order: i, dirty: true, synced: false, deleted: false,
+            created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+          };
+        });
+        Store.saveTypes(App.state.types);
+      }
+      App.sortRecords();
+    },
+
+    sortRecords: function () {
       App.state.records.sort(function (a, b) {
         if (a.played_on === b.played_on) return (b.created_at || '') > (a.created_at || '') ? 1 : -1;
         return a.played_on < b.played_on ? 1 : -1;
       });
     },
 
-    /* ---- 从云端拉取全部数据（先渲染本地缓存，云端同步后台进行，避免手机慢网络时一直空白） ---- */
-    reloadAll: function (silent) {
+    /* ---- 触发后台同步（拉取 + 推送）。云端只是镜像，失败时数据仍在本地，不影响使用 ---- */
+    syncCloud: function () {
       if (!App.state.user) return Promise.resolve();
-      var seq = ++App.state.syncSeq;       // 本次同步序号，用于丢弃过期回调
-      App.state._settled = false;
+      if (navigator.onLine === false) return Promise.resolve();
       App.state.loading = true;
       App.state.syncErr = false;
       App.state.syncTimeout = false;
-
-      // 立即可见：先把上次缓存的数据渲染出来，云端同步在后台默默进行，不再干等空白
-      App.state.types = Cache.loadTypes();
-      App.state.records = Cache.loadRecords();
-      App.reinjectPending();          // 关键：未同步到云端的记录立即显示，刷新/断网也不丢
-      App.renderAll();
-      if (!silent) {
-        if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
-        App.refreshIcon(true);
-      }
-
-      return new Promise(function (resolve) {
-        /* 收尾：done=成功 / err=失败 / isTimeout=超时，三者互斥 */
-        function settle(done, err, isTimeout) {
-          if (seq !== App.state.syncSeq || App.state._settled) return;  // 已有更新的同步，丢弃本次结果
-          App.state._settled = true;
+      if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+      App.refreshIcon(true);
+      return App.syncCloudPull()
+        .then(function () { return App.syncCloudPush(); })
+        .then(function () {
           App.state.loading = false;
-          App.state.syncErr = !!err;
-          App.state.syncTimeout = !!isTimeout;
-          App.state.lastSync = {
-            ok: !!done,
-            err: (err && err.message) ? err.message : (isTimeout ? '超时（30 秒）' : ''),
-            ts: Date.now()
-          };
+          App.state.lastSync = { ok: true, err: '', ts: Date.now() };
           App.refreshIcon(false);
-          if (done) {
-            // 把尚未同步的离线记录重新放回状态（本地已存，稍后重试），保证始终可见
-            App.Offline.all().forEach(function (op) {
-              var sig = App.normSig(op.payload);
-              // 云端已存在同内容的已同步记录 → 该离线条目其实早就上传成功了（队列残留），
-              // 直接清掉队列，并把本地临时副本替换为云端真实记录（带真实 id，后续可编辑/删除）
-              // 注意：云端返回的记录没有 _pending 字段(为 undefined)，必须用 !== true 判定「已同步」
-              var dup = App.state.records.find(function (r) {
-                return r.id !== op.localId && r._pending !== true && App.normSig(r) === sig;
-              });
-              if (dup) {
-                App.Offline.remove(op.localId);
-                App.state.records = App.state.records.map(function (r) {
-                  if (r.id !== op.localId) return r;
-                  var d = {}; for (var k in dup) d[k] = dup[k]; d._pending = false; return d;
-                });
-                return;
-              }
-              // 否则按原逻辑：本地临时 id 已存在则视为同一份；否则新增一条待同步记录
-              // 云端记录 _pending 为 undefined，用 !== true 才能被正确识别为「已存在」
-              var exists = App.state.records.some(function (r) {
-                return r.id === op.localId || (r._pending !== true && App.normSig(r) === sig);
-              });
-              if (!exists) {
-                var rec = { id: op.localId, _pending: true, user_id: op.uid, created_at: new Date().toISOString() };
-                Object.keys(op.payload).forEach(function (k) { rec[k] = op.payload[k]; });
-                App.state.records.push(rec);
-              }
-            });
-            App.state.records.sort(function (a, b) {
-              if (a.played_on === b.played_on) return (b.created_at || '') > (a.created_at || '') ? 1 : -1;
-              return a.played_on < b.played_on ? 1 : -1;
-            });
-            Cache.save(App.state.types, App.state.records);  // 同步成功，刷新本地缓存（只存已同步的）
-            App.renderAll();
-            App.flushPending();   // 立即重试离线记录
-          }
-          // 同步失败/超时：本地未同步记录已在本函数开头恢复显示，
-          // 这里再尝试推一次云端（网络恢复时自动成功），避免一直卡在「同步中」
-          if (!done) App.flushPending();
+          App.renderAll();
           if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
-          App.updateSyncBanner();   // 同步结束后刷新横幅（失败也如实提示）
-          if (err && !isTimeout) { U.toast(API.msg(err)); console.error(err); }
-          if (isTimeout) U.toast('云端同步超时，点右上角刷新图标重试');
-          resolve();
-        }
+          App.updateSyncBanner();
+        })
+        .catch(function (err) {
+          App.state.loading = false;
+          App.state.syncErr = true;
+          App.state.lastSync = { ok: false, err: (err && err.message) || '', ts: Date.now() };
+          App.refreshIcon(false);
+          // 拉取失败也要尝试把本地改动推上去，并刷新横幅（失败如实提示）
+          App.syncCloudPush().then(function () {
+            App.renderAll();
+            if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+            App.updateSyncBanner();
+          });
+          if (err && err.message) { U.toast(API.msg(err)); console.error(err); }
+        });
+    },
 
-        Promise.all([API.listTypes(), API.listRecords()]).then(function (res) {
-          var tRes = res[0], rRes = res[1];
-          if (tRes.error) throw tRes.error;
-          if (rRes.error) throw rRes.error;
+    /* ---- 从云端拉取：只「补充/更新」本地，绝不删除本地记录（根治「刷新后记录消失」） ---- */
+    syncCloudPull: function () {
+      if (!App.state.user) return Promise.resolve();
+      return withTimeout(Promise.all([API.listTypes(), API.listRecords()]), 30000).then(function (res) {
+        var tRes = res[0], rRes = res[1];
+        if (tRes.error) throw tRes.error;
+        if (rRes.error) throw rRes.error;
 
-          App.state.types = tRes.data || [];
-          App.state.records = rRes.data || [];
+        // 跳过没有 client_uuid 的旧行（迁移前遗留的孤儿），避免本地出现重复
+        var cTypes = (tRes.data || []).filter(function (t) { return t.client_uuid; });
+        var cRecs  = (rRes.data || []).filter(function (r) { return r.client_uuid; });
 
-          // 新账号：写入默认 3 种类型
-          if (App.state.types.length === 0) {
-            return API.seedTypes(App.state.user.id).then(function (r) {
-              if (!r.error) App.state.types = r.data || [];
-            });
-          }
-        }).then(function () { settle(true); }).catch(function (err) { settle(false, err); });
+        // 合并类型：云端有、本地没有 → 新增；云端有、本地干净 → 以云端为准；本地有改动 → 本地优先
+        var localTypes = Store.loadTypes();
+        cTypes.forEach(function (ct) {
+          var i = localTypes.findIndex(function (t) { return t.client_uuid === ct.client_uuid; });
+          var fresh = { id: ct.id, client_uuid: ct.client_uuid, name: ct.name, color: ct.color,
+            sort_order: ct.sort_order || 0, dirty: false, synced: true, deleted: false,
+            created_at: ct.created_at, updated_at: ct.updated_at };
+          if (i < 0) localTypes.push(fresh);
+          else if (!localTypes[i].dirty) localTypes[i] = fresh;        // 本地干净 → 跟随云端
+          else if (!localTypes[i].id) localTypes[i].id = ct.id;        // 本地改动但缺云端 id → 补上
+        });
+        Store.saveTypes(localTypes);
 
-        // 超时保护：最多等 30 秒（手机访问 supabase.co 经常慢），超时后转成明确的「同步超时」，不再无限转圈
-        setTimeout(function () { settle(false, null, true); }, 30000);
+        // 合并记录：同理，云端绝不作为「删除」依据
+        var localRecs = Store.loadRecords();
+        cRecs.forEach(function (cr) {
+          var i = localRecs.findIndex(function (r) { return r.client_uuid === cr.client_uuid; });
+          var fresh = {
+            client_uuid: cr.client_uuid,
+            // 新记录用 type_cuuid；旧记录（迁移前）无该列，回退到 type_id（其值正好等于迁移后类型的 client_uuid）
+            type_id: cr.type_cuuid || (cr.type_id ? String(cr.type_id) : ''),
+            played_on: cr.played_on, duration_min: cr.duration_min, effort: cr.effort,
+            cost: cr.cost, note: cr.note || '',
+            created_at: cr.created_at, updated_at: cr.updated_at,
+            dirty: false, synced: true, deleted: false
+          };
+          if (i < 0) localRecs.push(fresh);
+          else if (!localRecs[i].dirty) localRecs[i] = fresh;          // 本地干净 → 跟随云端
+        });
+        // 清理：已删除且已同步的本地记录（云端也已删），直接从本地移除
+        localRecs = localRecs.filter(function (r) { return !(r.deleted && r.synced); });
+        Store.saveRecords(localRecs);
+
+        App.state.types = localTypes;
+        App.state.records = localRecs;
+        App.sortRecords();
+        return { types: cTypes.length, records: cRecs.length };
       });
     },
 
-    /* ---- 离线保存队列：保存先写本地，后台同步云端；连不上则保留，网络恢复/下次打开自动重试 ---- */
-    Offline: {
-      KEY: 'tl_pending',
-      _rd: function () { try { return JSON.parse(localStorage.getItem(this.KEY)) || []; } catch (e) { return []; } },
-      _wr: function (l) { try { localStorage.setItem(this.KEY, JSON.stringify(l)); } catch (e) {} },
-      enqueue: function (op) { var l = this._rd(); l.push(op); this._wr(l); },
-      remove: function (localId) { this._wr(this._rd().filter(function (o) { return o.localId !== localId; })); },
-      all: function () { return this._rd(); },
-      /* 启动时清掉可能残留的 _inflight 标记：上次上传还没完成就切走/重开 App 会把它写进 localStorage，
-       * 导致后续 flushPending 一律跳过、永远不再重试（这正是「已存本地却永远待上传」的卡死根因）。 */
-      scrubInflight: function () {
-        var l = this._rd();
-        var changed = false;
-        l.forEach(function (o) { if (o._inflight) { delete o._inflight; changed = true; } });
-        if (changed) this._wr(l);
+    /* ---- 把本地待同步的改动推到云端，按 client_uuid 幂等写入（根治「重复记录」） ---- */
+    syncCloudPush: function (silent) {
+      if (!App.state.user) return Promise.resolve();
+      if (navigator.onLine === false) return Promise.resolve();   // 明显离线，跳过，避免无谓重试
+      var dirtyTypes = Store.loadTypes().filter(function (t) { return t.dirty; });
+      var dirtyRecs  = Store.loadRecords().filter(function (r) { return r.dirty; });
+      if (!dirtyTypes.length && !dirtyRecs.length) {
+        App.state.flushing = false; App.state.flushErr = false;
+        return Promise.resolve();
       }
-    },
-
-    /* 把未同步的离线记录逐个尝试同步云端；成功后出队，失败则保留稍后重试。
-     * 在途标记 _inflight 只存在内存（不写盘），App 重启即清空，避免「卡死再也不重试」。 */
-    flushPending: function (silent) {
-      if (!App.state.user) return;
-      // 只取不在内存在途的记录，避免同一记录被并发同步两次（重复上传）
-      var ops = App.Offline.all().filter(function (o) { return !_inflight[o.localId]; });
-      if (!ops.length) return;
-      App.state.flushing = true;   // 标记正在推送云端，同步文案如实显示「同步中/待同步」
+      App.state.flushing = true;
       App.updateSyncBanner();
-      var total = ops.length, done = 0, okN = 0, failN = 0, errMsg = '';
-      function finish() {
+      var uid = App.state.user.id;
+      var jobs = [];
+      var errMsg = '';
+
+      dirtyTypes.forEach(function (t) {
+        var p = t.deleted
+          ? API.deleteTypeByUuid(t.client_uuid)
+          : API.upsertType(uid, t);
+        jobs.push(withTimeout(p, 40000).then(function (res) {
+          if (res.error) throw res.error;
+          if (t.deleted) { Store.removeType(t.client_uuid); return; }
+          var saved = Store.loadTypes().find(function (x) { return x.client_uuid === t.client_uuid; });
+          if (saved) {
+            if (res.data && res.data.id) saved.id = res.data.id;
+            saved.dirty = false; saved.synced = true;
+            Store.putType(saved);
+          }
+        }).catch(function (err) { if (!errMsg) errMsg = (err && err.message) || String(err); throw err; }));
+      });
+
+      dirtyRecs.forEach(function (r) {
+        var p = r.deleted
+          ? API.deleteRecordByUuid(r.client_uuid)
+          : API.upsertRecord(uid, { client_uuid: r.client_uuid, type_cuuid: r.type_id || null,
+              played_on: r.played_on, duration_min: r.duration_min, effort: r.effort,
+              cost: r.cost, note: r.note || null });
+        jobs.push(withTimeout(p, 40000).then(function (res) {
+          if (res.error) throw res.error;
+          if (r.deleted) { Store.removeRecord(r.client_uuid); return; }
+          var saved = Store.loadRecords().find(function (x) { return x.client_uuid === r.client_uuid; });
+          if (saved) {
+            if (res.data && res.data.id) saved.id = res.data.id;
+            saved.dirty = false; saved.synced = true;
+            Store.putRecord(saved);
+          }
+        }).catch(function (err) { if (!errMsg) errMsg = (err && err.message) || String(err); throw err; }));
+      });
+
+      var okN = 0, failN = 0;
+      return Promise.all(jobs.map(function (j) {
+        return j.then(function () { okN++; }).catch(function () { failN++; });
+      })).then(function () {
         App.state.flushing = false;
         App.state.flushErr = !!failN;
         App.state.lastFlush = { ok: okN, fail: failN, err: errMsg, ts: Date.now() };
-        if (okN && !failN) { if (!silent) U.toast('已同步到云端 ☁️'); }
+        if (okN && !failN) { if (!silent) U.toast('已同步到云端'); }
         else if (failN) { if (!silent) U.toast('云端暂时连不上，已存手机本地，稍后自动重试'); }
         App.updateSyncBanner();
-      }
-      ops.forEach(function (op) {
-        _inflight[op.localId] = true;   // 内存标记在途（不落盘）
-        var p = op.op === 'update'
-          ? API.updateRecord(op.realId, op.payload)
-          : API.createRecord(op.uid, op.payload);
-        withTimeout(p, 40000).then(function (res) {
-          if (res.error) throw res.error;
-          if (res.data) {
-            // 云端返回真实记录（带真实 id）：用真实记录替换本地临时记录
-            var row = res.data; row._pending = false;
-            App.state.records = App.state.records.map(function (r) {
-              return r.id === op.localId ? row : r;
-            });
-          } else {
-            // 请求成功但 Supabase 未回传数据（罕见）：把本地临时副本转正，标记已同步
-            App.state.records = App.state.records.map(function (r) {
-              if (r.id !== op.localId) return r;
-              var c = {}; for (var k in r) c[k] = r[k]; c._pending = false; return c;
-            });
-          }
-          App.Offline.remove(op.localId);           // 同步成功：无条件出队
-          delete _inflight[op.localId];
-          App.renderAll();
-          Cache.save(App.state.types, App.state.records);
-          done++; okN++; if (done === total) finish();
-        }).catch(function (err) {
-          console.warn('离线记录同步失败（保留，稍后自动重试）', op.localId, err);
-          delete _inflight[op.localId];
-          var m = (err && err.message) ? err.message : String(err);
-          if (!errMsg) errMsg = m;
-          done++; failN++; if (done === total) finish();
-        });
+        App.renderAll();
+        if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
       });
+    },
+
+    /* ---- 用户操作（保存/删除）后调用：本地已落盘，这里静默尝试推云端 ---- */
+    maybeSync: function (silent) {
+      if (!App.state.cloudEnabled) return;
+      App.syncCloudPush(silent);
     }
   };
 
@@ -497,6 +555,7 @@
 
   function enterApp(user) {
     App.state.user = user;
+    App.state.cloudEnabled = true;     // 已登录云端：云端作为可选镜像启用
     $('#me-email').textContent = API.displayName(user);
     show('#view-main');
     if (!entered) { entered = true; App.go('records'); }
@@ -506,6 +565,7 @@
   function leaveApp() {
     entered = false;
     App.state.user = null;
+    App.state.cloudEnabled = false;
     App.state.types = [];
     App.state.records = [];
     $('#auth-pass').value = '';
@@ -534,7 +594,7 @@
     if (bootStarted) { attemptSession(); return; }
     bootStarted = true;
 
-    App.Offline.scrubInflight();   // 清掉上次可能残留的 _inflight 标记，解除「永远不再重试」卡死
+    migrate();   // 把旧版本本地数据平滑迁移到本地优先模型（仅首次）
 
     if (!Config.isReady()) { show('#view-setup'); return; }
     if (!API.init()) { show('#view-setup'); return; }
@@ -549,7 +609,7 @@
       }
     });
 
-    // 已有本地登录票据 → 秒开（先渲染本地缓存数据），联网校验放到后台，避免卡在启动屏
+    // 已有本地登录票据 → 秒开（先渲染本地数据），联网校验放到后台，避免卡在启动屏
     var cached = API.peekSession();
     if (cached && cached.user) {
       try { API.setSession(cached.session); } catch (e) {}
@@ -637,9 +697,9 @@
     window.__deferredPrompt = e;
   });
 
-  /* 网络恢复时，自动把离线保存的记录重试同步到云端 */
-  window.addEventListener('online', function () { App.flushPending(); });
+  /* 网络恢复时，自动把本地改动重试同步到云端 */
+  window.addEventListener('online', function () { App.maybeSync(true); });
 
-  /* 后台每 25 秒自动重试一次未同步记录（静默，不弹 toast），手机网络慢也能最终传上去 */
-  setInterval(function () { if (navigator.onLine !== false) App.flushPending(true); }, 25000);
+  /* 后台每 25 秒自动重试一次未同步改动（静默，不弹 toast），手机网络慢也能最终传上去 */
+  setInterval(function () { if (navigator.onLine !== false) App.maybeSync(true); }, 25000);
 })();

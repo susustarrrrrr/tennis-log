@@ -18,6 +18,7 @@ create extension if not exists "pgcrypto";
 -- ============================================================
 create table if not exists public.sport_types (
   id          uuid primary key default gen_random_uuid(),
+  client_uuid text,                                   -- 本地优先架构的不变幂等键（见底部「升级迁移」）
   user_id     uuid not null references auth.users(id) on delete cascade,
   name        text not null check (length(name) between 1 and 10),
   color       text not null default '#FF9EB5',
@@ -32,6 +33,8 @@ create index if not exists sport_types_user_idx on public.sport_types(user_id);
 -- ============================================================
 create table if not exists public.play_records (
   id            uuid primary key default gen_random_uuid(),
+  client_uuid   text,                                   -- 本地优先架构的不变幂等键
+  type_cuuid    text,                                   -- 记录引用的类型的 client_uuid（替代 type_id）
   user_id       uuid not null references auth.users(id) on delete cascade,
   type_id       uuid references public.sport_types(id) on delete set null,
   played_on     date not null,
@@ -124,3 +127,36 @@ create policy "play_records delete own"
 
 -- insert into public.play_records(user_id, type_id, played_on, duration_min, effort, cost, note)
 -- values ('YOUR-USER-UUID', null, current_date, 90, 3, 200, '正手稳定提升');
+
+-- ============================================================
+-- 6) 升级迁移（本地优先架构 · 幂等，可重复执行）
+--    把旧版云端数据补齐 client_uuid 幂等键，并回填「client_uuid = id」，
+--    这样已在手机上迁移到本地优先模型的旧记录能精准命中云端旧行、绝不产生重复。
+--    全新安装的空表运行本段也只是「无操作」，安全。
+-- ============================================================
+
+-- 列已在上方的 create table 中声明；这里仅兜底，确保老表也有这些列
+alter table public.sport_types add column if not exists client_uuid text;
+alter table public.play_records add column if not exists client_uuid text;
+alter table public.play_records add column if not exists type_cuuid text;
+
+-- 回填：旧行没有 client_uuid 时，复用其 cloud id 作为 client_uuid
+update public.sport_types
+  set client_uuid = id::text
+  where client_uuid is null and id is not null
+    and id::text not in (select client_uuid from public.sport_types where client_uuid is not null);
+update public.play_records
+  set client_uuid = id::text
+  where client_uuid is null and id is not null
+    and id::text not in (select client_uuid from public.play_records where client_uuid is not null);
+
+-- 唯一约束（client_uuid 是幂等 upsert 的 onConflict 目标；允许 null 以便兼容历史孤儿行）
+create unique index if not exists sport_types_client_uuid_idx
+  on public.sport_types(client_uuid) where client_uuid is not null;
+create unique index if not exists play_records_client_uuid_idx
+  on public.play_records(client_uuid) where client_uuid is not null;
+
+-- 把 play_records 里仍指向旧 type_id 的记录，也顺手把 type_id 同步进 type_cuuid（可选，便于核对）
+update public.play_records
+  set type_cuuid = (select client_uuid from public.sport_types where sport_types.id = play_records.type_id)
+  where type_cuuid is null and type_id is not null;

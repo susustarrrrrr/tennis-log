@@ -42,7 +42,7 @@ window.Records = (function () {
    * --------------------------------------------------------- */
   function render() {
     var st = App.state;
-    var all = st.records;
+    var all = st.records.filter(function (r) { return !r.deleted; });   // 本地优先：已删除的先过滤掉
 
     /* 顶部小统计：本月 */
     var thisYm = U.ym(U.todayStr());
@@ -62,9 +62,9 @@ window.Records = (function () {
       (st.filterType === 'all' ? ' style="background:var(--brand-2);color:#fff"' : '') + '>' +
       U.svg('tennis') + '<span>全部 ' + all.length + '</span></button>'];
     st.types.forEach(function (t) {
-      var n = all.filter(function (r) { return r.type_id === t.id; }).length;
-      var on = st.filterType === t.id;
-      chips.push('<button class="filter-chip tap-on' + (on ? ' active' : '') + '" data-t="' + t.id + '"' +
+      var n = all.filter(function (r) { return r.type_id === t.client_uuid; }).length;
+      var on = st.filterType === t.client_uuid;
+      chips.push('<button class="filter-chip tap-on' + (on ? ' active' : '') + '" data-t="' + t.client_uuid + '"' +
         (on ? ' style="background:' + t.color + ';color:' + U.inkOn(t.color) + '"' : '') + '>' +
         U.svg('tennis') + '<span>' + U.esc(t.name) + ' ' + n + '</span></button>');
     });
@@ -77,7 +77,7 @@ window.Records = (function () {
     });
 
     /* 列表（分页渲染，避免大量历史记录一次性渲染卡顿） */
-    var list = st.filterType === 'all' ? all : all.filter(function (r) { return r.type_id === st.filterType; });
+    var list = st.filterType === 'all' ? all : all.filter(function (r) { return r.type_id === st.filterType; });  // st.filterType 存的是类型的 client_uuid
     $('#records-empty').classList.toggle('hidden', list.length > 0);
 
     if (lastFilter !== st.filterType) { renderLimit = RENDER_STEP; lastFilter = st.filterType; }
@@ -126,19 +126,19 @@ window.Records = (function () {
   function sum(arr, f) { return arr.reduce(function (a, r) { return a + Number(r[f] || 0); }, 0); }
   function find(id) {
     var out = null;
-    App.state.records.some(function (r) { if (r.id === id) { out = r; return true; } });
+    App.state.records.some(function (r) { if (r.client_uuid === id) { out = r; return true; } });
     return out;
   }
 
   function card(r) {
     var t = App.typeById(r.type_id);
     return '' +
-      '<div class="rec" data-id="' + r.id + '">' +
+      '<div class="rec" data-id="' + r.client_uuid + '">' +
         '<div class="bar" style="background:' + t.color + '"></div>' +
         '<div class="body">' +
           '<div class="r1">' +
             '<div class="tname"><span class="dot" style="background:' + t.color + '"></span>' + U.esc(t.name) + '</div>' +
-            '<div class="date">' + U.fmtDate(r.played_on) + (r._pending ? ' <span class="psync">同步中</span>' : '') + '</div>' +
+            '<div class="date">' + U.fmtDate(r.played_on) + (r.dirty && !r.synced ? ' <span class="psync">待同步</span>' : '') + '</div>' +
           '</div>' +
           '<div class="r2">' +
             '<span class="pill">' + U.svg('clock') + ' <b class="num">' + U.fmtDur(r.duration_min) + '</b></span>' +
@@ -165,8 +165,8 @@ window.Records = (function () {
       return;
     }
 
-    pickedType = rec ? rec.type_id : st.types[0].id;
-    if (!App.typeById(pickedType).id) pickedType = st.types[0].id;
+    pickedType = rec ? rec.type_id : st.types[0].client_uuid;
+    if (!App.typeById(pickedType).client_uuid) pickedType = st.types[0].client_uuid;
     pickedEffort = rec ? Number(rec.effort) : 3;
 
     // 新增时尝试恢复上次未保存的草稿（编辑已有记录不恢复）
@@ -188,8 +188,8 @@ window.Records = (function () {
 
   function renderTypeChips() {
     var html = App.state.types.map(function (t) {
-      var on = t.id === pickedType;
-      return '<button class="chip' + (on ? ' active' : '') + '" data-id="' + t.id + '" style="' +
+      var on = t.client_uuid === pickedType;
+      return '<button class="chip' + (on ? ' active' : '') + '" data-id="' + t.client_uuid + '" style="' +
         (on ? 'background:' + t.color + ';color:' + U.inkOn(t.color) : 'color:' + t.color) + '">' +
         U.esc(t.name) + '</button>';
     }).join('');
@@ -228,7 +228,7 @@ window.Records = (function () {
     if (e.target === this) closeSheet();
   });
 
-  /* 保存（离线优先：先写本地，后台同步云端，连不上也不丢） */
+  /* 保存（本地优先：先写本地——唯一真相，立即可见；上传云端是后台可选动作） */
   $('#rec-save').addEventListener('click', function () {
     var dur = parseInt($('#rec-duration').value, 10);
     var date = $('#rec-date').value;
@@ -236,81 +236,47 @@ window.Records = (function () {
     if (!dur || dur <= 0) return U.toast('请填写运动时长');
     if (dur > 1440) return U.toast('时长最多 1440 分钟');
 
-    var payload = {
-      type_id: pickedType,
-      played_on: date,
-      duration_min: dur,
-      effort: pickedEffort,
-      cost: Math.max(0, Number($('#rec-cost').value || 0)),
-      note: $('#rec-note').value.trim()
-    };
-
     var isEdit = !!editing;
-    var isPendingEdit = isEdit && editing._pending;   // 编辑一条还没同步上去的记录
+    var now = new Date().toISOString();
+    // 本地优先：整条记录落到本地存储（新建与编辑共用 client_uuid，天然去重，永不复重）
+    var rec = isEdit ? editing : { client_uuid: U.uuid(), created_at: now };
+    rec.type_id = pickedType;                 // 存的是「类型的 client_uuid」
+    rec.played_on = date;
+    rec.duration_min = dur;
+    rec.effort = pickedEffort;
+    rec.cost = Math.max(0, Number($('#rec-cost').value || 0));
+    rec.note = $('#rec-note').value.trim();
+    rec.updated_at = now;
+    rec.dirty = true;          // 有改动 → 标记待同步云端
+    rec.deleted = false;
 
-    // 内容签名：用于去重，避免「以为没存上又存一遍」产生重复记录
-    var sig = function (p) {
-      return [p.type_id, p.played_on, p.duration_min, p.effort, p.cost, p.note].join('§');
-    };
-
-    // 新建记录时，若队列里已有同内容的未同步记录，直接复用其 localId（天然去重）；编辑则沿用原 id
-    var localId;
-    if (isEdit) {
-      localId = editing.id;
-    } else {
-      var dup = App.Offline.all().filter(function (o) { return o.uid === App.state.user.id && sig(o.payload) === sig(payload); })[0];
-      localId = dup ? dup.localId : ('loc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7));
-    }
-
-    // 乐观写入：立刻进本地状态（立即可见），标记 _pending。用 localId 作主键，已存在则就地更新（去重）
-    var optimistic = { id: localId, _pending: true, user_id: App.state.user.id, created_at: new Date().toISOString() };
-    Object.keys(payload).forEach(function (k) { optimistic[k] = payload[k]; });
-    var idx = App.state.records.findIndex(function (r) { return r.id === localId; });
-    if (idx >= 0) App.state.records[idx] = optimistic;
-    else App.state.records.push(optimistic);
-    sortRecords();
-
-    if (isPendingEdit) App.Offline.remove(editing.id);   // 编辑未同步记录：旧的那条出队，避免重复
-    App.Offline.enqueue({
-      localId: localId,
-      op: isPendingEdit ? 'create' : (isEdit ? 'update' : 'create'),
-      uid: App.state.user.id,
-      realId: (isEdit && !isPendingEdit) ? editing.id : null,
-      created_at: optimistic.created_at,
-      payload: payload
-    });
+    AppStore.putRecord(rec);                  // 落盘（client_uuid 相同即就地更新）
+    App.state.records = AppStore.loadRecords();
+    App.sortRecords();
 
     closeSheet();
-    App.renderAll();
     editing = null;
-    U.toast('已存到手机本地，正在同步云端…');
-
-    App.flushPending();   // 立即尝试同步；失败则保留，网络恢复/下次打开自动重试
+    App.renderAll();
+    U.toast('已存到手机本地' + (App.state.cloudEnabled ? '，正在同步云端…' : ''));
+    App.maybeSync();                          // 后台尝试推云端；失败保留，网络恢复/下次打开自动重试
   });
 
-  /* 删除 */
+  /* 删除（本地优先：先标记删除并落盘，后台再同步云端；云端删除幂等，不会出错） */
   $('#rec-delete').addEventListener('click', function () {
     if (!editing) return;
-    // 还没同步上去的离线记录：直接本地移除 + 出队，不发请求
-    if (editing._pending) {
-      App.Offline.remove(editing.id);
-      App.state.records = App.state.records.filter(function (r) { return r.id !== editing.id; });
-      closeSheet(); editing = null; App.renderAll();
-      U.toast('已删除（本地）');
-      return;
-    }
+    if (editing.deleted) { closeSheet(); editing = null; return; }
     U.confirmBox('确定删除这条打球记录吗？<br><span style="font-size:12px;color:#A79FB0">删除后无法恢复</span>', '删除')
       .then(function (ok) {
         if (!ok) return;
-        var id = editing.id;
-        return API.deleteRecord(id).then(function (res) {
-          if (res.error) throw res.error;
-          App.state.records = App.state.records.filter(function (r) { return r.id !== id; });
-          closeSheet();
-          editing = null;
-          App.renderAll();
-          U.toast('已删除');
-        });
+        editing.deleted = true;                // 标记删除（界面立即隐藏）
+        editing.dirty = true;                  // 待同步到云端做真实删除
+        AppStore.putRecord(editing);
+        App.state.records = AppStore.loadRecords();
+        closeSheet();
+        editing = null;
+        App.renderAll();
+        U.toast('已删除');
+        App.maybeSync();                       // 后台把删除同步到云端（幂等，云端没有也不报错）
       }).catch(function (err) { U.toast(API.msg(err)); });
   });
 

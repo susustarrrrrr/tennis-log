@@ -159,6 +159,14 @@ window.U = (function () {
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  /* ---------- 稳定唯一 ID（UUID v4，本地生成，作为云端幂等键） ---------- */
+  function uuid() {
+    if (window.crypto && crypto.randomUUID) {
+      try { return crypto.randomUUID(); } catch (e) {}
+    }
+    return 'u_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+  }
+
   /* ---------- 常量 ---------- */
   var EFFORT_TEXT = ['', '轻松热身', '有点微汗', '正常强度', '有点累人', '力竭爆汗'];
 
@@ -192,7 +200,7 @@ window.U = (function () {
     pad: pad, todayStr: todayStr, dateStr: dateStr, parseDate: parseDate, ym: ym,
     fmtDate: fmtDate, fmtDateFull: fmtDateFull,
     fmtDur: fmtDur, fmtDurShort: fmtDurShort, money: money,
-    rgba: rgba, inkOn: inkOn, esc: esc, ballsHTML: ballsHTML,
+    rgba: rgba, inkOn: inkOn, esc: esc, ballsHTML: ballsHTML, uuid: uuid,
     EFFORT_TEXT: EFFORT_TEXT, PRESET_COLORS: PRESET_COLORS, DEFAULT_TYPES: DEFAULT_TYPES, WEEK: WEEK
   };
 })();

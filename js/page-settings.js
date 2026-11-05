@@ -27,8 +27,8 @@ window.Settings = (function () {
       return;
     }
     $('#type-list').innerHTML = st.types.map(function (t) {
-      var n = st.records.filter(function (r) { return r.type_id === t.id; }).length;
-      return '<div class="type-row" data-id="' + t.id + '">' +
+      var n = st.records.filter(function (r) { return r.type_id === t.client_uuid && !r.deleted; }).length;
+      return '<div class="type-row" data-id="' + t.client_uuid + '">' +
         '<span class="swatch" style="background:' + t.color + '"></span>' +
         '<span class="tn">' + U.esc(t.name) + '</span>' +
         '<span class="cnt">' + n + ' 次</span>' +
@@ -39,7 +39,7 @@ window.Settings = (function () {
     $$('#type-list .type-row').forEach(function (el) {
       el.addEventListener('click', function () {
         var t = null;
-        App.state.types.some(function (x) { if (x.id === el.dataset.id) { t = x; return true; } });
+        App.state.types.some(function (x) { if (x.client_uuid === el.dataset.id) { t = x; return true; } });
         if (t) openTypeSheet(t);
       });
     });
@@ -88,7 +88,7 @@ window.Settings = (function () {
   $('#sheet-type').addEventListener('click', function (e) { if (e.target === this) closeTypeSheet(); });
   $('#btn-add-type').addEventListener('click', function () { openTypeSheet(null); });
 
-  /* 保存类型 */
+  /* 保存类型（本地优先：先落本地，后台同步云端） */
   $('#type-save').addEventListener('click', function () {
     var name = $('#type-name').value.trim();
     var color = $('#type-color').value;
@@ -98,53 +98,55 @@ window.Settings = (function () {
     var btn = this;
     btn.disabled = true; btn.textContent = '保存中…';
 
-    var p = editingType
-      ? API.updateType(editingType.id, { name: name, color: color })
-      : API.createType(App.state.user.id, { name: name, color: color, sort_order: App.state.types.length });
+    var isEdit = !!editingType;
+    var now = new Date().toISOString();
+    // 本地优先：整条类型落到本地存储（client_uuid 不变 → 幂等 upsert，永不复重）
+    var t = isEdit ? editingType : { client_uuid: U.uuid(), created_at: now };
+    t.name = name;
+    t.color = color;
+    t.sort_order = isEdit ? (editingType.sort_order || 0) : App.state.types.length;
+    t.dirty = true;
+    t.deleted = false;
+    t.synced = isEdit ? (!!editingType.synced) : false;
+    AppStore.putType(t);
+    App.state.types = AppStore.loadTypes();
+    closeTypeSheet();
+    editingType = null;
+    App.renderAll();
+    U.toast('保存成功');
+    App.maybeSync();
 
-    p.then(function (res) {
-      if (res.error) throw res.error;
-      var row = res.data;
-      if (editingType) {
-        App.state.types = App.state.types.map(function (t) { return t.id === row.id ? row : t; });
-      } else {
-        App.state.types.push(row);
-      }
-      closeTypeSheet();
-      editingType = null;
-      App.renderAll();
-      U.toast('保存成功 ✅');
-    }).catch(function (err) {
-      U.toast(API.msg(err));
-    }).then(function () {
-      btn.disabled = false; btn.textContent = '保存';
-    });
+    btn.disabled = false; btn.textContent = '保存';
   });
 
-  /* 删除类型 */
+  /* 删除类型（本地优先：标记删除并落盘，后台同步云端；引用它的记录转「未分类」） */
   $('#type-delete').addEventListener('click', function () {
     if (!editingType) return;
-    var id = editingType.id;
-    var n = App.state.records.filter(function (r) { return r.type_id === id; }).length;
+    var cuuid = editingType.client_uuid;
+    var n = App.state.records.filter(function (r) { return r.type_id === cuuid && !r.deleted; }).length;
     var text = n
       ? '该类型下还有 <b>' + n + '</b> 条记录。<br>删除后这些记录会变成「未分类」，记录本身不会丢失。'
       : '确定删除这个运动类型吗？';
 
     U.confirmBox(text, '删除').then(function (ok) {
       if (!ok) return;
-      return API.deleteType(id).then(function (res) {
-        if (res.error) throw res.error;
-        App.state.types = App.state.types.filter(function (t) { return t.id !== id; });
-        App.state.records = App.state.records.map(function (r) {
-          if (r.type_id === id) r.type_id = null;
-          return r;
-        });
-        if (App.state.filterType === id) App.state.filterType = 'all';
-        closeTypeSheet();
-        editingType = null;
-        App.renderAll();
-        U.toast('已删除');
+      editingType.deleted = true;                // 标记删除（待同步云端真实删除）
+      editingType.dirty = true;
+      AppStore.putType(editingType);
+      // 引用该类型的记录改为未分类，并标记待同步
+      var recs = AppStore.loadRecords().map(function (r) {
+        if (r.type_id === cuuid) { r.type_id = ''; r.dirty = true; }
+        return r;
       });
+      AppStore.saveRecords(recs);
+      App.state.types = AppStore.loadTypes();
+      App.state.records = AppStore.loadRecords();
+      if (App.state.filterType === cuuid) App.state.filterType = 'all';
+      closeTypeSheet();
+      editingType = null;
+      App.renderAll();
+      U.toast('已删除');
+      App.maybeSync();
     }).catch(function (err) { U.toast(API.msg(err)); });
   });
 

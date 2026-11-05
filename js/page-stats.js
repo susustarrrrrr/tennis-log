@@ -93,7 +93,7 @@ window.Stats = (function () {
     var map = {};
     list.forEach(function (r) {
       var t = App.typeById(r.type_id);
-      var key = t.id ? t.id : '__uncat__';
+      var key = t.client_uuid || '__uncat__';
       if (!map[key]) map[key] = { name: t.name, color: t.color, rs: [] };
       map[key].rs.push(r);
     });

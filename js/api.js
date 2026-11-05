@@ -113,6 +113,42 @@ window.API = (function () {
     return client().from('sport_types').delete().eq('id', id);
   }
 
+  /* ---------------- 幂等 upsert（本地优先架构：client_uuid 为不变主键） ---------------- */
+
+  /** 运动类型幂等写入：按 client_uuid 冲突即更新，绝不重复（云端需先执行 schema 里的 client_uuid 迁移） */
+  function upsertType(uid, t) {
+    return client().from('sport_types').upsert({
+      client_uuid: t.client_uuid,
+      user_id: uid,
+      name: t.name,
+      color: t.color,
+      sort_order: (t.sort_order || 0)
+    }, { onConflict: 'client_uuid' }).select().single();
+  }
+
+  /** 打球记录幂等写入：按 client_uuid 冲突即更新；type_cuuid 存类型的 client_uuid（本地优先引用方式） */
+  function upsertRecord(uid, r) {
+    return client().from('play_records').upsert({
+      client_uuid: r.client_uuid,
+      user_id: uid,
+      type_cuuid: r.type_cuuid || null,
+      played_on: r.played_on,
+      duration_min: r.duration_min,
+      effort: r.effort,
+      cost: r.cost,
+      note: r.note || null,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'client_uuid' }).select().single();
+  }
+
+  /** 按 client_uuid 删除（幂等：不存在也算成功，避免本地已删却反复报错） */
+  function deleteRecordByUuid(cuuid) {
+    return client().from('play_records').delete().eq('client_uuid', cuuid);
+  }
+  function deleteTypeByUuid(cuuid) {
+    return client().from('sport_types').delete().eq('client_uuid', cuuid);
+  }
+
   /** 新用户首次登录时写入默认 3 种类型 */
   function seedTypes(uid) {
     var rows = U.DEFAULT_TYPES.map(function (t) {
@@ -177,6 +213,7 @@ window.API = (function () {
     init: init, client: client, toEmail: toEmail, displayName: displayName,
     signUp: signUp, signIn: signIn, signOut: signOut, getSession: getSession, peekSession: peekSession, setSession: setSession, onAuth: onAuth, updateProfile: updateProfile,
     listTypes: listTypes, createType: createType, updateType: updateType, deleteType: deleteType, seedTypes: seedTypes,
+    upsertType: upsertType, upsertRecord: upsertRecord, deleteTypeByUuid: deleteTypeByUuid, deleteRecordByUuid: deleteRecordByUuid,
     listRecords: listRecords, createRecord: createRecord, updateRecord: updateRecord, deleteRecord: deleteRecord,
     msg: msg
   };
