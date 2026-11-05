@@ -157,6 +157,8 @@ input[type="date"] { min-height: 50px; }
 .auth-msg { font-size: 14px; color: var(--danger); min-height: 20px; margin-bottom: 8px; text-align: center; }
 .auth-msg.ok { color: var(--brand); }
 .link-btn { display: block; margin: 14px auto 0; color: var(--muted); font-size: 13px; text-decoration: underline; }
+.sync-detail { display: block; width: 100%; box-sizing: border-box; text-align: left; margin-top: 10px; padding: 11px 14px; background: var(--brand-soft); color: var(--brand-2); border: 1px solid rgba(31,168,119,.22); border-radius: 14px; font-size: 13px; font-weight: 600; }
+.sync-detail:active { filter: brightness(.97); }
 
 /* ---------- 顶栏 / 底栏 ---------- */
 .topbar {

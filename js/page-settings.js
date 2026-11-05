@@ -261,5 +261,10 @@ window.Settings = (function () {
     });
   }
 
+  /* 冲澳档案：「查看未上传的记录」按钮 → 打开同步自查面板（列出具体未上传的记录） */
+  if ($('#btn-sync-detail')) {
+    $('#btn-sync-detail').addEventListener('click', function () { App.openDiag(); });
+  }
+
   return { render: render, openTypeSheet: openTypeSheet };
 })();
