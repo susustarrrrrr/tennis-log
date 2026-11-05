@@ -139,6 +139,14 @@
       return '本地 ' + n + ' 条 · 已同步云端';
     },
 
+    /* 刷新冲澳档案同步状态行，并联动「查看未上传」按钮显隐（仅有待同步记录时显示） */
+    refreshSyncBadge: function () {
+      var sub = $('#me-sub');
+      if (sub) sub.innerHTML = App.syncLabel();
+      var btn = $('#btn-sync-detail');
+      if (btn) btn.classList.toggle('hidden', App.pendingCount() === 0);
+    },
+
     /* 右上角刷新按钮：只切旋转动画，绝不替换图标内容 */
     refreshIcon: function (spinning) {
       var b = $('#btn-refresh');
@@ -269,7 +277,7 @@
       App.loadLocal();                 // 关键：先读本地，界面立刻有数据，刷新/断网都不丢
       App.renderAll();
       if (!silent) {
-        if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+        if ($('#me-sub')) App.refreshSyncBadge();
       }
       return App.syncCloud();          // 后台与云端双向同步（拉取绝不删本地）
     },
@@ -322,7 +330,7 @@
           App.state.lastSync = { ok: true, err: '', ts: Date.now() };
           App.refreshIcon(false);
           App.renderAll();
-          if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+          if ($('#me-sub')) App.refreshSyncBadge();
           App.updateSyncBanner();
         })
         .catch(function (err) {
@@ -333,7 +341,7 @@
           // 拉取失败也要尝试把本地改动推上去，并刷新横幅（失败如实提示）
           App.syncCloudPush().then(function () {
             App.renderAll();
-            if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+            if ($('#me-sub')) App.refreshSyncBadge();
             App.updateSyncBanner();
           });
           if (err && err.message) { U.toast(API.msg(err)); console.error(err); }
@@ -453,7 +461,7 @@
         else if (failN) { if (!silent) U.toast('云端暂时连不上，已存手机本地，稍后自动重试'); }
         App.updateSyncBanner();
         App.renderAll();
-        if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+        if ($('#me-sub')) App.refreshSyncBadge();
       });
     },
 

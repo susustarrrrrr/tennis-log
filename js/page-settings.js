@@ -19,7 +19,7 @@ window.Settings = (function () {
    * --------------------------------------------------------- */
   function render() {
     var st = App.state;
-    $('#me-sub').innerHTML = App.syncLabel();
+    App.refreshSyncBadge();
     renderAvatar();
 
     if (!st.types.length) {
