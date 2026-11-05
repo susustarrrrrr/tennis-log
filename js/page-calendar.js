@@ -17,6 +17,7 @@ window.Calendar = (function () {
   function groupByDate(y, m) {
     var map = {};
     App.state.records.forEach(function (r) {
+      if (r.deleted) return;                     // 已删除（含待同步删除）不计入日历
       var d = U.parseDate(r.played_on);
       if (d.getFullYear() === y && d.getMonth() === m) {
         (map[r.played_on] = map[r.played_on] || []).push(r);
@@ -114,7 +115,7 @@ window.Calendar = (function () {
     $$('#cal-grid .cal-cell.sel').forEach(function (c) { c.classList.remove('sel'); });
     var cell = $('#cal-grid .cal-cell[data-d="' + ds + '"]');
     if (cell) cell.classList.add('sel');
-    var recs = App.state.records.filter(function (r) { return r.played_on === ds; });
+    var recs = App.state.records.filter(function (r) { return r.played_on === ds && !r.deleted; });
     $('#day-title').textContent = U.fmtDateFull(ds);
 
     if (!recs.length) {

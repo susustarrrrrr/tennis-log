@@ -14,6 +14,7 @@ window.Stats = (function () {
   });
 
   function inRange(r) {
+    if (r.deleted) return false;                  // 已删除（含待同步删除）不计入统计
     var now = new Date();
     if (range === 'month') return U.ym(r.played_on) === U.ym(U.dateStr(now));
     if (range === 'year') return String(r.played_on).slice(0, 4) === String(now.getFullYear());
@@ -63,6 +64,7 @@ window.Stats = (function () {
     }
     var vals = keys.map(function (k) {
       return App.state.records.reduce(function (a, r) {
+        if (r.deleted) return a;
         return U.ym(r.played_on) === k ? a + Number(r.duration_min || 0) : a;
       }, 0) / 60;
     });
