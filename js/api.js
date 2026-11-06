@@ -5,6 +5,7 @@
 window.API = (function () {
 
   var sb = null;
+  var _noCuuidCol = false;   // 云端表无 client_uuid 列时自适应降级（免用户跑 SQL 迁移）
 
   function init() {
     if (!window.Config.isReady()) return null;
@@ -115,38 +116,78 @@ window.API = (function () {
 
   /* ---------------- 幂等 upsert（本地优先架构：client_uuid 为不变主键） ---------------- */
 
-  /** 运动类型幂等写入：按 client_uuid 冲突即更新，绝不重复（云端需先执行 schema 里的 client_uuid 迁移） */
-  function upsertType(uid, t) {
-    return client().from('sport_types').upsert({
-      client_uuid: t.client_uuid,
-      user_id: uid,
-      name: t.name,
-      color: t.color,
-      sort_order: (t.sort_order || 0)
-    }, { onConflict: 'client_uuid' }).select().single();
+  /* ---- 幂等 upsert：用主键 id 做冲突匹配（不依赖 client_uuid 唯一索引，更稳） ----
+   * 已有云端 id → 冲突更新；无 id 的新记录 → 插入（id 由云端 default 生成）。
+   * 云端表若没有 client_uuid 列（未执行迁移），自动降级：不传该列、记录改用 type_id 关联。 */
+  function upsertType(uid, t, legacy) {
+    var noCol = _noCuuidCol || legacy;
+    var row = { user_id: uid, name: t.name, color: t.color, sort_order: (t.sort_order || 0) };
+    if (t.id) row.id = t.id;
+    if (!noCol) row.client_uuid = t.client_uuid;
+    return client().from('sport_types').upsert(row, { onConflict: 'id' }).select().single()
+      .then(function (res) {
+        if (!_noCuuidCol && res.error && /client_uuid/i.test(res.error.message || '') && /does not exist/i.test(res.error.message || '')) {
+          _noCuuidCol = true;
+          return upsertType(uid, t, true);
+        }
+        return res;
+      });
   }
 
-  /** 打球记录幂等写入：按 client_uuid 冲突即更新；type_cuuid 存类型的 client_uuid（本地优先引用方式） */
-  function upsertRecord(uid, r) {
-    return client().from('play_records').upsert({
-      client_uuid: r.client_uuid,
+  function upsertRecord(uid, r, legacy) {
+    var noCol = _noCuuidCol || legacy;
+    var row = {
       user_id: uid,
-      type_cuuid: r.type_cuuid || null,
       played_on: r.played_on,
       duration_min: r.duration_min,
       effort: r.effort,
       cost: r.cost,
       note: r.note || null,
       updated_at: new Date().toISOString()
-    }, { onConflict: 'client_uuid' }).select().single();
+    };
+    if (r.id) row.id = r.id;
+    if (!noCol) {
+      row.client_uuid = r.client_uuid;
+      row.type_cuuid = r.type_cuuid || null;
+    } else {
+      row.type_id = r._typeId || null;   // 降级：旧列关联
+    }
+    return client().from('play_records').upsert(row, { onConflict: 'id' }).select().single()
+      .then(function (res) {
+        if (!_noCuuidCol && res.error && /client_uuid/i.test(res.error.message || '') && /does not exist/i.test(res.error.message || '')) {
+          _noCuuidCol = true;
+          return upsertRecord(uid, r, true);
+        }
+        return res;
+      });
   }
 
-  /** 按 client_uuid 删除（幂等：不存在也算成功，避免本地已删却反复报错） */
-  function deleteRecordByUuid(cuuid) {
-    return client().from('play_records').delete().eq('client_uuid', cuuid);
+  /** 按 client_uuid 删除；云端若无该列则降级按 id 删除（ref: {cuuid, id}） */
+  function deleteRecordByUuid(ref) {
+    if (_noCuuidCol || !ref || !ref.cuuid) {
+      return client().from('play_records').delete().eq('id', ref && ref.id);
+    }
+    return client().from('play_records').delete().eq('client_uuid', ref.cuuid)
+      .then(function (res) {
+        if (res.error && /client_uuid/i.test(res.error.message || '') && /does not exist/i.test(res.error.message || '')) {
+          _noCuuidCol = true;
+          return client().from('play_records').delete().eq('id', ref.id);
+        }
+        return res;
+      });
   }
-  function deleteTypeByUuid(cuuid) {
-    return client().from('sport_types').delete().eq('client_uuid', cuuid);
+  function deleteTypeByUuid(ref) {
+    if (_noCuuidCol || !ref || !ref.cuuid) {
+      return client().from('sport_types').delete().eq('id', ref && ref.id);
+    }
+    return client().from('sport_types').delete().eq('client_uuid', ref.cuuid)
+      .then(function (res) {
+        if (res.error && /client_uuid/i.test(res.error.message || '') && /does not exist/i.test(res.error.message || '')) {
+          _noCuuidCol = true;
+          return client().from('sport_types').delete().eq('id', ref.id);
+        }
+        return res;
+      });
   }
 
   /** 新用户首次登录时写入默认 3 种类型 */

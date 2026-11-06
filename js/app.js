@@ -427,7 +427,7 @@
       var jobs = [];
       dirtyTypes.forEach(function (t) {
         var p = t.deleted
-          ? API.deleteTypeByUuid(t.client_uuid)
+          ? API.deleteTypeByUuid({ cuuid: t.client_uuid, id: t.id })
           : API.upsertType(uid, t);
         jobs.push(withTimeout(p, 40000).then(function (res) {
           if (res.error) throw res.error;
@@ -438,8 +438,9 @@
 
       dirtyRecs.forEach(function (r) {
         var p = r.deleted
-          ? API.deleteRecordByUuid(r.client_uuid)
-          : API.upsertRecord(uid, { client_uuid: r.client_uuid, type_cuuid: r.type_id || null,
+          ? API.deleteRecordByUuid({ cuuid: r.client_uuid, id: r.id })
+          : API.upsertRecord(uid, { id: r.id, client_uuid: r.client_uuid,
+              type_cuuid: r.type_id || null, _typeId: App.typeById(r.type_id).id,
               played_on: r.played_on, duration_min: r.duration_min, effort: r.effort,
               cost: r.cost, note: r.note || null });
         jobs.push(withTimeout(p, 40000).then(function (res) {
