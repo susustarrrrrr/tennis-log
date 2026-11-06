@@ -321,7 +321,7 @@
       App.state.loading = true;
       App.state.syncErr = false;
       App.state.syncTimeout = false;
-      if ($('#me-sub')) $('#me-sub').innerHTML = App.syncLabel();
+      if ($('#me-sub')) App.refreshSyncBadge();
       App.refreshIcon(true);
       return App.syncCloudPull()
         .then(function () { return App.syncCloudPush(); })
@@ -413,22 +413,19 @@
       App.state.flushing = true;
       App.updateSyncBanner();
       var uid = App.state.user.id;
-      var jobs = [];
       var errMsg = '';
+      var okTypeId = {}, okRecId = {};        // 成功同步的 client_uuid → 云端 id
+      var delTypes = [], delRecs = [];        // 成功删除的 client_uuid
 
+      var jobs = [];
       dirtyTypes.forEach(function (t) {
         var p = t.deleted
           ? API.deleteTypeByUuid(t.client_uuid)
           : API.upsertType(uid, t);
         jobs.push(withTimeout(p, 40000).then(function (res) {
           if (res.error) throw res.error;
-          if (t.deleted) { Store.removeType(t.client_uuid); return; }
-          var saved = Store.loadTypes().find(function (x) { return x.client_uuid === t.client_uuid; });
-          if (saved) {
-            if (res.data && res.data.id) saved.id = res.data.id;
-            saved.dirty = false; saved.synced = true;
-            Store.putType(saved);
-          }
+          if (t.deleted) delTypes.push(t.client_uuid);
+          else { if (res.data && res.data.id) okTypeId[t.client_uuid] = res.data.id; }
         }).catch(function (err) { if (!errMsg) errMsg = (err && err.message) || String(err); throw err; }));
       });
 
@@ -440,13 +437,8 @@
               cost: r.cost, note: r.note || null });
         jobs.push(withTimeout(p, 40000).then(function (res) {
           if (res.error) throw res.error;
-          if (r.deleted) { Store.removeRecord(r.client_uuid); return; }
-          var saved = Store.loadRecords().find(function (x) { return x.client_uuid === r.client_uuid; });
-          if (saved) {
-            if (res.data && res.data.id) saved.id = res.data.id;
-            saved.dirty = false; saved.synced = true;
-            Store.putRecord(saved);
-          }
+          if (r.deleted) delRecs.push(r.client_uuid);
+          else { if (res.data && res.data.id) okRecId[r.client_uuid] = res.data.id; }
         }).catch(function (err) { if (!errMsg) errMsg = (err && err.message) || String(err); throw err; }));
       });
 
@@ -454,6 +446,26 @@
       return Promise.all(jobs.map(function (j) {
         return j.then(function () { okN++; }).catch(function () { failN++; });
       })).then(function () {
+        // 全部网络请求落定后，统一对本地存储做一次原子更新，避免并发读写互相覆盖
+        // 导致部分记录 dirty 标记残留、冲澳档案一直显示「待同步云端」
+        if (delTypes.length || Object.keys(okTypeId).length) {
+          var tl = Store.loadTypes();
+          tl.forEach(function (t) {
+            if (okTypeId[t.client_uuid] !== undefined) { t.id = okTypeId[t.client_uuid]; t.dirty = false; t.synced = true; }
+          });
+          tl = tl.filter(function (t) { return delTypes.indexOf(t.client_uuid) < 0; });
+          Store.saveTypes(tl);
+          App.state.types = tl;
+        }
+        if (delRecs.length || Object.keys(okRecId).length) {
+          var rl = Store.loadRecords();
+          rl.forEach(function (r) {
+            if (okRecId[r.client_uuid] !== undefined) { r.id = okRecId[r.client_uuid]; r.dirty = false; r.synced = true; }
+          });
+          rl = rl.filter(function (r) { return delRecs.indexOf(r.client_uuid) < 0; });
+          Store.saveRecords(rl);
+          App.state.records = rl;
+        }
         App.state.flushing = false;
         App.state.flushErr = !!failN;
         App.state.lastFlush = { ok: okN, fail: failN, err: errMsg, ts: Date.now() };
