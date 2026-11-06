@@ -289,7 +289,13 @@
     /* ---- 花费隐私开关：统一一个开关，控制 App 内所有花费数字显隐 ---- */
     costHidden: (function () { try { return localStorage.getItem('tl_cost_hidden') === '1'; } catch (e) { return false; } })(),
     /* 云端备份总开关：关闭后纯本地保存、完全不连网（用户可在冲澳档案里切换） */
-    cloudOff: (function () { try { return localStorage.getItem('tl_cloud_off') === '1'; } catch (e) { return false; } })(),
+    cloudOff: (function () {
+      try {
+        var v = localStorage.getItem('tl_cloud_off');
+        // 默认纯本地保存（用户原方案1）：只有显式设为 '0'（开启云端备份）才连网
+        return v !== '0';
+      } catch (e) { return true; }
+    })(),
     cloudWanted: function () { return !App.cloudOff; },
     costView: function (v) {
       return App.costHidden ? '¥ ••••' : ('¥' + U.money(v));
