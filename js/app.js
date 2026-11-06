@@ -355,7 +355,7 @@
         App.renderAll();
         return Promise.resolve();
       }
-      if (navigator.onLine === false) return Promise.resolve();
+      // 不再依赖不可靠的 navigator.onLine（手机 WebView 常误报离线），让真实请求决定成败
       App.state.loading = true;
       App.state.syncErr = false;
       App.state.syncTimeout = false;
@@ -450,7 +450,7 @@
     /* ---- 把本地待同步的改动推到云端，按 client_uuid 幂等写入（根治「重复记录」） ---- */
     syncCloudPush: function (silent) {
       if (!App.state.user) return Promise.resolve();
-      if (navigator.onLine === false) return Promise.resolve();   // 明显离线，跳过，避免无谓重试
+      // 不再依赖不可靠的 navigator.onLine：真实请求失败会如实落到 lastFlush.err，由状态文案体现
       var dirtyTypes = Store.loadTypes().filter(function (t) { return t.dirty; });
       var dirtyRecs  = Store.loadRecords().filter(function (r) { return r.dirty; });
       if (!dirtyTypes.length && !dirtyRecs.length) {
@@ -651,8 +651,10 @@
     App.reloadAll().then(function () {
       if (!App.cloudWanted()) return;   // 仅本地模式：不提示云端
       var pending = App.pendingCount();
-      if (App.state.syncErr || App.state.flushErr || pending > 0) {
-        U.toast(pending > 0 ? ('有 ' + pending + ' 条仍在手机本地，待联网上传云端') : '云端暂时连不上，已安全存手机本地');
+      if (App.state.syncErr || App.state.flushErr) {
+        U.toast('云端暂时传不上，已存手机本地，稍后自动重试');
+      } else if (pending > 0) {
+        // 已联网但仍有待同步：状态行已如实显示，不再弹 toast 反复打扰
       } else {
         U.toast('已同步云端最新数据');
       }
@@ -776,5 +778,5 @@
   window.addEventListener('online', function () { App.maybeSync(true); });
 
   /* 后台每 25 秒自动重试一次未同步改动（静默，不弹 toast），手机网络慢也能最终传上去 */
-  setInterval(function () { if (navigator.onLine !== false) App.maybeSync(true); }, 25000);
+  setInterval(function () { App.maybeSync(true); }, 25000);
 })();
