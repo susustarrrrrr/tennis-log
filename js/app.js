@@ -127,24 +127,25 @@
       lastSync: null     // 上次「从云端下载」的结果（用于自查面板）
     },
 
-    /* 云端同步状态文案（本地优先：先说清楚「本地 N 条」，再补充云端情况） */
+    /* 云端同步状态文案（诚实原则：上传没成功就绝不说「已同步云端」） */
     syncLabel: function () {
       var st = App.state;
       var n = (st.records || []).filter(function (r) { return !r.deleted; }).length;
+      if (!App.cloudWanted()) return '本地 ' + n + ' 条 · 仅本地保存（云端已关闭）';
       if (!st.cloudEnabled) return '本地 ' + n + ' 条 · 未连接云端';
       var pending = App.pendingCount();
       if (st.loading || st.flushing) return U.svg('cloud') + ' 云端同步中…';
       if (pending > 0) return '本地 ' + n + ' 条 · ' + pending + ' 条待同步云端';
-      if (st.syncErr) return (st.syncTimeout ? '同步超时，' : '同步失败，') + '点右上角刷新图标重试';
+      if (st.syncErr || st.flushErr) return '本地 ' + n + ' 条 · 云端上传未成功，已安全存手机本地';
       return '本地 ' + n + ' 条 · 已同步云端';
     },
 
-    /* 刷新冲澳档案同步状态行，并联动「查看未上传」按钮显隐（仅有待同步记录时显示） */
+    /* 刷新冲澳档案同步状态行，并联动「查看未上传」按钮显隐（开启云端且有待同步记录时才显示） */
     refreshSyncBadge: function () {
       var sub = $('#me-sub');
       if (sub) sub.innerHTML = App.syncLabel();
       var btn = $('#btn-sync-detail');
-      if (btn) btn.classList.toggle('hidden', App.pendingCount() === 0);
+      if (btn) btn.classList.toggle('hidden', !App.cloudWanted() || App.pendingCount() === 0);
     },
 
     /* 右上角刷新按钮：只切旋转动画，绝不替换图标内容 */
@@ -231,10 +232,28 @@
       return s;
     },
 
+    /* 网络类错误翻译成平静说明（不把底层报错原文甩给用户） */
+    friendlyErr: function (s) {
+      s = String(s || '');
+      if (/load failed|failed to fetch|networkerror|timeout|typeerror/i.test(s))
+        return '云端暂时连不上（网络问题，已安全存手机本地，联网后会自动重试）';
+      return s;
+    },
+
     /* 同步自查面板：让用户（和我们）看清「待同步记录 / 上次上传错误 / 上次下载错误」，便于对症 */
     openDiag: function () {
       var mask = $('#diag-mask');
       if (!mask) return;
+      // 仅本地模式：不与云端通信，给出明确说明而非编造「已同步」
+      if (!App.cloudWanted()) {
+        $('#diag-body').innerHTML = '<div class="diag-sec"><b>当前模式：仅本地保存</b>' +
+          '<div class="diag-row">已关闭云端备份，记录只存在这部手机，不与任何服务器通信。' +
+          '在上方打开「云端备份同步」开关即可恢复备份。</div></div>';
+        mask.classList.remove('hidden');
+        $('#diag-close').onclick = function () { mask.classList.add('hidden'); };
+        mask.onclick = function (e) { if (e.target === mask) mask.classList.add('hidden'); };
+        return;
+      }
       var pending = App.state.records.filter(function (r) { return r.dirty && !r.deleted; });
       var lf = App.state.lastFlush || {};
       var ls = App.state.lastSync || {};
@@ -248,9 +267,9 @@
       html += '</div>';
       html += '<div class="diag-sec"><b>上次上传</b><div class="diag-row">' +
         (lf.ts ? (new Date(lf.ts).toLocaleString('zh-CN') + ' · 成功 ' + lf.ok + ' / 失败 ' + lf.fail) : '尚未尝试') +
-        (lf.err ? '<br><span class="diag-err">错误：' + U.esc(lf.err) + '</span>' : '') + '</div></div>';
+        (lf.err ? '<br><span class="diag-err">错误：' + U.esc(App.friendlyErr(lf.err)) + '</span>' : '') + '</div></div>';
       html += '<div class="diag-sec"><b>上次下载</b><div class="diag-row">' +
-        (ls.ts ? (new Date(ls.ts).toLocaleString('zh-CN') + ' · ' + (ls.ok ? '成功' : '失败') + (ls.err ? ('<br><span class="diag-err">错误：' + U.esc(ls.err) + '</span>') : '')) : '尚未尝试') + '</div></div>';
+        (ls.ts ? (new Date(ls.ts).toLocaleString('zh-CN') + ' · ' + (ls.ok ? '成功' : '失败') + (ls.err ? ('<br><span class="diag-err">错误：' + U.esc(App.friendlyErr(ls.err)) + '</span>') : '')) : '尚未尝试') + '</div></div>';
       if (lf.err && /does not exist/i.test(lf.err)) {
         html += '<div class="diag-sec diag-tip" style="border-color:#e8a33d;color:#9a5b00;background:#fff7ea">'
           + '⚠️ 云端数据库表缺少新架构必需的列。请用电脑登录 Supabase 控制台 → SQL Editor，'
@@ -269,6 +288,9 @@
 
     /* ---- 花费隐私开关：统一一个开关，控制 App 内所有花费数字显隐 ---- */
     costHidden: (function () { try { return localStorage.getItem('tl_cost_hidden') === '1'; } catch (e) { return false; } })(),
+    /* 云端备份总开关：关闭后纯本地保存、完全不连网（用户可在冲澳档案里切换） */
+    cloudOff: (function () { try { return localStorage.getItem('tl_cloud_off') === '1'; } catch (e) { return false; } })(),
+    cloudWanted: function () { return !App.cloudOff; },
     costView: function (v) {
       return App.costHidden ? '¥ ••••' : ('¥' + U.money(v));
     },
@@ -321,20 +343,38 @@
       });
     },
 
-    /* ---- 触发后台同步（拉取 + 推送）。云端只是镜像，失败时数据仍在本地，不影响使用 ---- */
+    /* ---- 触发后台同步（拉取 + 推送）。云端只是镜像，失败时数据仍在本地，不影响使用 ----
+     * 诚实原则：上传(PUSH)只要有一条没成功，整体状态就绝不显示「已同步云端」。 */
     syncCloud: function () {
       if (!App.state.user) return Promise.resolve();
+      // 仅本地模式：完全不碰云端，状态如实显示「仅本地保存」
+      if (!App.cloudWanted()) {
+        App.state.loading = false; App.state.syncErr = false; App.state.flushErr = false; App.state.flushing = false;
+        App.state.lastSync = { ok: true, err: '', ts: Date.now(), localOnly: true };
+        if ($('#me-sub')) App.refreshSyncBadge();
+        App.renderAll();
+        return Promise.resolve();
+      }
       if (navigator.onLine === false) return Promise.resolve();
       App.state.loading = true;
       App.state.syncErr = false;
       App.state.syncTimeout = false;
+      App.state.flushErr = false;
       if ($('#me-sub')) App.refreshSyncBadge();
       App.refreshIcon(true);
       return App.syncCloudPull()
         .then(function () { return App.syncCloudPush(); })
         .then(function () {
           App.state.loading = false;
-          App.state.lastSync = { ok: true, err: '', ts: Date.now() };
+          // 诚实判断：上传若有失败 / 仍有待同步，就绝不说「已同步」
+          var pending = App.pendingCount();
+          var pushFailed = App.state.flushErr;
+          if (pushFailed || pending > 0) {
+            App.state.syncErr = true;
+            App.state.lastSync = { ok: false, err: (App.state.lastFlush && App.state.lastFlush.err) || '部分记录未上传到云端', ts: Date.now() };
+          } else {
+            App.state.lastSync = { ok: true, err: '', ts: Date.now() };
+          }
           App.refreshIcon(false);
           App.renderAll();
           if ($('#me-sub')) App.refreshSyncBadge();
@@ -345,7 +385,7 @@
           App.state.syncErr = true;
           App.state.lastSync = { ok: false, err: (err && err.message) || '', ts: Date.now() };
           App.refreshIcon(false);
-          // 拉取失败也要尝试把本地改动推上去，并刷新横幅（失败如实提示）
+          // 拉取失败也要尝试把本地改动推上去，并刷新（失败如实提示）
           App.syncCloudPush().then(function () {
             App.renderAll();
             if ($('#me-sub')) App.refreshSyncBadge();
@@ -487,6 +527,7 @@
 
     /* ---- 用户操作（保存/删除）后调用：本地已落盘，这里静默尝试推云端 ---- */
     maybeSync: function (silent) {
+      if (!App.cloudWanted()) return;            // 已关闭云端：纯本地，不发起任何网络同步
       if (!App.state.cloudEnabled) return;
       App.syncCloudPush(silent);
     }
@@ -608,7 +649,13 @@
   });
   $('#btn-refresh').addEventListener('click', function () {
     App.reloadAll().then(function () {
-      if (!App.state.syncErr) U.toast('已同步云端最新数据');
+      if (!App.cloudWanted()) return;   // 仅本地模式：不提示云端
+      var pending = App.pendingCount();
+      if (App.state.syncErr || App.state.flushErr || pending > 0) {
+        U.toast(pending > 0 ? ('有 ' + pending + ' 条仍在手机本地，待联网上传云端') : '云端暂时连不上，已安全存手机本地');
+      } else {
+        U.toast('已同步云端最新数据');
+      }
     });
   });
   $('#fab').addEventListener('click', function () { Records.openSheet(null, null); });

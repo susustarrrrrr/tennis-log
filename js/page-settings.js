@@ -20,6 +20,9 @@ window.Settings = (function () {
   function render() {
     var st = App.state;
     App.refreshSyncBadge();
+    // 云端备份开关：按当前状态点亮/熄灭
+    var sw = $('#cloud-switch');
+    if (sw) sw.classList.toggle('off', !App.cloudWanted());
     renderAvatar();
 
     if (!st.types.length) {
@@ -264,6 +267,22 @@ window.Settings = (function () {
   /* 冲澳档案：「查看未上传的记录」按钮 → 打开同步自查面板（列出具体未上传的记录） */
   if ($('#btn-sync-detail')) {
     $('#btn-sync-detail').addEventListener('click', function () { App.openDiag(); });
+  }
+
+  /* 云端备份总开关：开 = 本地优先 + 云端镜像；关 = 纯本地保存、完全不连网 */
+  if ($('#btn-cloud-toggle')) {
+    $('#btn-cloud-toggle').addEventListener('click', function () {
+      App.cloudOff = !App.cloudOff;
+      try { localStorage.setItem('tl_cloud_off', App.cloudOff ? '1' : '0'); } catch (e) {}
+      var sw = $('#cloud-switch'); if (sw) sw.classList.toggle('off', !App.cloudWanted());
+      App.refreshSyncBadge();
+      if (App.cloudWanted()) {
+        App.syncCloud();
+        U.toast('已开启云端备份，正在同步…');
+      } else {
+        U.toast('已切换为仅本地保存，记录只存在这部手机');
+      }
+    });
   }
 
   return { render: render, openTypeSheet: openTypeSheet };

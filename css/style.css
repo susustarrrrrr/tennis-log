@@ -468,6 +468,12 @@ main { padding: 8px 16px calc(var(--tabbar-h) + var(--safe-b) + 30px); }
 .menu-item.danger .mi-ico { color: var(--danger); }
 .chev { color: #D9E0DC; }
 
+/* 开关（云端备份同步） */
+.switch { width: 44px; height: 26px; border-radius: 13px; background: var(--brand); position: relative; transition: background .2s; flex: none; }
+.switch.off { background: #D7D2DC; }
+.switch .knob { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: left .2s; }
+.switch:not(.off) .knob { left: 21px; }
+
 /* ---------- 抽屉 / 弹窗 ---------- */
 .sheet-mask, .modal-mask {
   position: fixed; inset: 0; z-index: 60; background: rgba(46, 60, 52, .34);
