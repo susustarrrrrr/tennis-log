@@ -251,7 +251,14 @@
         (lf.err ? '<br><span class="diag-err">错误：' + U.esc(lf.err) + '</span>' : '') + '</div></div>';
       html += '<div class="diag-sec"><b>上次下载</b><div class="diag-row">' +
         (ls.ts ? (new Date(ls.ts).toLocaleString('zh-CN') + ' · ' + (ls.ok ? '成功' : '失败') + (ls.err ? ('<br><span class="diag-err">错误：' + U.esc(ls.err) + '</span>') : '')) : '尚未尝试') + '</div></div>';
-      html += '<div class="diag-sec diag-tip">本地数据永远安全，不会因云端连不上而丢失。若「待同步」一直不为 0：多为手机连 supabase.co 较慢，或云端写入权限(Row Level Security)拦截。点「立即同步」可手动重试；多次失败请把「错误」文字发我。</div>';
+      if (lf.err && /does not exist/i.test(lf.err)) {
+        html += '<div class="diag-sec diag-tip" style="border-color:#e8a33d;color:#9a5b00;background:#fff7ea">'
+          + '⚠️ 云端数据库表缺少新架构必需的列。请用电脑登录 Supabase 控制台 → SQL Editor，'
+          + '把本项目 supabase/schema.sql 的第 6 段「升级迁移」整段粘贴执行（仅几行：加列 + 回填 client_uuid），'
+          + '执行完回到这里点「立即同步」即可。本地数据不受影响。</div>';
+      } else {
+        html += '<div class="diag-sec diag-tip">本地数据永远安全，不会因云端连不上而丢失。若「待同步」一直不为 0：多为手机连 supabase.co 较慢，或云端写入权限(Row Level Security)拦截。点「立即同步」可手动重试；多次失败请把「错误」文字发我。</div>';
+      }
       $('#diag-body').innerHTML = html;
       mask.classList.remove('hidden');
       $('#diag-close').onclick = function () { mask.classList.add('hidden'); };

@@ -140,15 +140,17 @@ alter table public.sport_types add column if not exists client_uuid text;
 alter table public.play_records add column if not exists client_uuid text;
 alter table public.play_records add column if not exists type_cuuid text;
 
--- 回填：旧行没有 client_uuid 时，复用其 cloud id 作为 client_uuid
+-- 回填：旧行没有 client_uuid 时，复用其 cloud id 作为 client_uuid。
+-- 注意：不要加 “not in (已存在的 client_uuid)” 这类条件——首次迁移时该子查询为空，
+-- SQL 的 NOT IN (空集) 返回 NULL 会让 UPDATE 一行都不执行，导致回填彻底失效。
+-- id 本身是主键（唯一），回填后 client_uuid 必唯一，不会破坏下方唯一索引；且重复执行安全
+-- （再次执行时 client_uuid 已非空，where client_uuid is null 不再命中）。
 update public.sport_types
   set client_uuid = id::text
-  where client_uuid is null and id is not null
-    and id::text not in (select client_uuid from public.sport_types where client_uuid is not null);
+  where client_uuid is null and id is not null;
 update public.play_records
   set client_uuid = id::text
-  where client_uuid is null and id is not null
-    and id::text not in (select client_uuid from public.play_records where client_uuid is not null);
+  where client_uuid is null and id is not null;
 
 -- 唯一约束（client_uuid 是幂等 upsert 的 onConflict 目标；允许 null 以便兼容历史孤儿行）
 create unique index if not exists sport_types_client_uuid_idx
