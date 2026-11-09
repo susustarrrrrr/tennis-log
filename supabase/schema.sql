@@ -152,11 +152,15 @@ update public.play_records
   set client_uuid = id::text
   where client_uuid is null and id is not null;
 
--- 唯一约束（client_uuid 是幂等 upsert 的 onConflict 目标；允许 null 以便兼容历史孤儿行）
-create unique index if not exists sport_types_client_uuid_idx
-  on public.sport_types(client_uuid) where client_uuid is not null;
-create unique index if not exists play_records_client_uuid_idx
-  on public.play_records(client_uuid) where client_uuid is not null;
+-- 唯一约束（client_uuid 是幂等键）：用「唯一约束」而非「部分唯一索引」，
+-- 因为 Postgres 无法用列名推断部分索引来做 ON CONFLICT。唯一约束同样允许多个 NULL（兼容历史孤儿行）。
+-- 先清理旧的部分唯一索引（若存在），避免与约束重复/冲突
+drop index if exists sport_types_client_uuid_idx;
+drop index if exists play_records_client_uuid_idx;
+alter table public.sport_types drop constraint if exists sport_types_client_uuid_uniq;
+alter table public.play_records drop constraint if exists play_records_client_uuid_uniq;
+alter table public.sport_types add constraint sport_types_client_uuid_uniq unique (client_uuid);
+alter table public.play_records add constraint play_records_client_uuid_uniq unique (client_uuid);
 
 -- 把 play_records 里仍指向旧 type_id 的记录，也顺手把 type_id 同步进 type_cuuid（可选，便于核对）
 update public.play_records
