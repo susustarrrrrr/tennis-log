@@ -116,15 +116,22 @@ window.API = (function () {
 
   /* ---------------- 幂等 upsert（本地优先架构：client_uuid 为不变主键） ---------------- */
 
-  /* ---- 幂等 upsert：用主键 id 做冲突匹配（不依赖 client_uuid 唯一索引，更稳） ----
-   * 已有云端 id → 冲突更新；无 id 的新记录 → 插入（id 由云端 default 生成）。
-   * 云端表若没有 client_uuid 列（未执行迁移），自动降级：不传该列、记录改用 type_id 关联。 */
+  /* ---- 幂等 upsert：用 client_uuid（身份证号）做冲突匹配 ----
+   * client_uuid 已是云端唯一索引：云端有 → 更新、无 → 新增，永不重复。
+   * 云端表若没有 client_uuid 列（未执行迁移），自动降级：不传该列、改用 id + type_id 关联。 */
   function upsertType(uid, t, legacy) {
     var noCol = _noCuuidCol || legacy;
     var row = { user_id: uid, name: t.name, color: t.color, sort_order: (t.sort_order || 0) };
-    if (t.id) row.id = t.id;
-    if (!noCol) row.client_uuid = t.client_uuid;
-    return client().from('sport_types').upsert(row, { onConflict: 'id' }).select().single()
+    var conflictCol;
+    if (noCol) {
+      if (t.id) row.id = t.id;            // 旧表无 client_uuid：只能靠 id 匹配
+      conflictCol = 'id';
+    } else {
+      // 有 client_uuid：用它做幂等匹配；故意不传 id，避免把云端主键改乱
+      row.client_uuid = t.client_uuid;
+      conflictCol = 'client_uuid';
+    }
+    return client().from('sport_types').upsert(row, { onConflict: conflictCol }).select().single()
       .then(function (res) {
         if (!_noCuuidCol && res.error && /client_uuid/i.test(res.error.message || '') && /does not exist/i.test(res.error.message || '')) {
           _noCuuidCol = true;
@@ -145,14 +152,20 @@ window.API = (function () {
       note: r.note || null,
       updated_at: new Date().toISOString()
     };
-    if (r.id) row.id = r.id;
-    if (!noCol) {
+    var conflictCol;
+    if (noCol) {
+      if (r.id) row.id = r.id;          // 旧表无 client_uuid：靠 id 匹配
+      row.type_id = r._typeId || null;   // 降级：旧列关联
+      conflictCol = 'id';
+    } else {
+      // 有 client_uuid：用它做幂等匹配；故意不传 id，
+      // 既避免「client_uuid 已存在但本地无 id」的老记录被当新行插入触发唯一索引冲突，
+      // 也避免本地 id 与云端 id 不一致时把云端主键改乱。
       row.client_uuid = r.client_uuid;
       row.type_cuuid = r.type_cuuid || null;
-    } else {
-      row.type_id = r._typeId || null;   // 降级：旧列关联
+      conflictCol = 'client_uuid';
     }
-    return client().from('play_records').upsert(row, { onConflict: 'id' }).select().single()
+    return client().from('play_records').upsert(row, { onConflict: conflictCol }).select().single()
       .then(function (res) {
         if (!_noCuuidCol && res.error && /client_uuid/i.test(res.error.message || '') && /does not exist/i.test(res.error.message || '')) {
           _noCuuidCol = true;

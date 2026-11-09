@@ -375,12 +375,10 @@
           // 诚实判断：上传若有失败 / 仍有待同步，就绝不说「已同步」
           var pending = App.pendingCount();
           var pushFailed = App.state.flushErr;
-          if (pushFailed || pending > 0) {
-            App.state.syncErr = true;
-            App.state.lastSync = { ok: false, err: (App.state.lastFlush && App.state.lastFlush.err) || '部分记录未上传到云端', ts: Date.now() };
-          } else {
-            App.state.lastSync = { ok: true, err: '', ts: Date.now() };
-          }
+          App.state.syncErr = !!(pushFailed || pending > 0);
+          // 「上次下载」只反映拉取是否成功（能走到这里说明 pull 已成功），
+          // 不再把上传错误张冠李戴写进下载状态
+          App.state.lastSync = { ok: true, err: '', ts: Date.now() };
           App.refreshIcon(false);
           App.renderAll();
           if ($('#me-sub')) App.refreshSyncBadge();
